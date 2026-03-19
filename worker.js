@@ -1,302 +1,228 @@
-/**
- * ShieldSmart Newsletter Worker
- * XNL Tech (affiliated: PromptMechanics.org)
- *
- * Routes:
- *   POST /subscribe          — Save subscriber to KV
- *   GET  /generate           — Generate newsletter with Anthropic (cron-triggered or manual)
- *   GET  /subscribers        — List subscribers (admin, requires secret header)
- *   POST /send               — Trigger send to all subscribers (admin)
- *
- * Env vars to set in Cloudflare dashboard:
- *   ANTHROPIC_API_KEY        — Your Anthropic API key
- *   ADMIN_SECRET             — Secret token for protected admin routes
- *   SEND_API_KEY             — (Optional) Your email sending service key (Mailgun, SendGrid, etc.)
- *   SEND_FROM                — e.g. "ShieldSmart <hello@xnltech.com>"
- *   SEND_DOMAIN              — e.g. "xnltech.com" (Mailgun domain)
- *
- * KV Namespace:
- *   SUBSCRIBERS              — Bind a KV namespace named SUBSCRIBERS in your Worker settings
- */
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// ─── CORS HEADERS ───────────────────────────────────────────────────────────
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Secret',
+// worker.js
+var CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-Admin-Secret"
 };
-
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', ...CORS },
+    headers: { "Content-Type": "application/json", ...CORS }
   });
 }
-
+__name(json, "json");
 function html(content, status = 200) {
   return new Response(content, {
     status,
-    headers: { 'Content-Type': 'text/html;charset=UTF-8', ...CORS },
+    headers: { "Content-Type": "text/html;charset=UTF-8", ...CORS }
   });
 }
-
-// ─── ROUTER ─────────────────────────────────────────────────────────────────
-export default {
+__name(html, "html");
+var worker_default = {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-
-    // Handle preflight
-    if (request.method === 'OPTIONS') {
+    if (request.method === "OPTIONS") {
       return new Response(null, { headers: CORS });
     }
-
-    if (request.method === 'POST' && url.pathname === '/subscribe') {
+    if (request.method === "POST" && url.pathname === "/subscribe") {
       return handleSubscribe(request, env);
     }
-
-    if (request.method === 'GET' && url.pathname === '/generate') {
+    if (request.method === "GET" && url.pathname === "/generate") {
       return handleGenerate(request, env);
     }
-
-    if (request.method === 'GET' && url.pathname === '/subscribers') {
+    if (request.method === "GET" && url.pathname === "/subscribers") {
       return handleListSubscribers(request, env);
     }
-
-    if (request.method === 'POST' && url.pathname === '/send') {
+    if (request.method === "POST" && url.pathname === "/send") {
       return handleSend(request, env);
     }
-
-    if (request.method === 'GET' && url.pathname === '/unsubscribe') {
+    if (request.method === "GET" && url.pathname === "/unsubscribe") {
       return handleUnsubscribePage(request, env);
     }
-
-    if (request.method === 'POST' && url.pathname === '/unsubscribe') {
+    if (request.method === "POST" && url.pathname === "/unsubscribe") {
       return handleUnsubscribeSubmit(request, env);
     }
-
-    if (request.method === 'POST' && url.pathname === '/verify-subscriber') {
+    if (request.method === "POST" && url.pathname === "/verify-subscriber") {
       return handleVerifySubscriber(request, env);
     }
-
-    if (request.method === 'GET' && url.pathname === '/archive') {
+    if (request.method === "GET" && url.pathname === "/archive") {
       return handleArchiveIndex(request, env);
     }
-
-    if (request.method === 'GET' && url.pathname.startsWith('/archive/')) {
-      const issueId = url.pathname.replace('/archive/', '');
+    if (request.method === "GET" && url.pathname.startsWith("/archive/")) {
+      const issueId = url.pathname.replace("/archive/", "");
       return handleArchiveRead(issueId, env);
     }
-
-    if (url.pathname === '/admin' && request.method === 'GET') {
+    if (url.pathname === "/admin" && request.method === "GET") {
       return handleAdminPage();
     }
-
-    if (url.pathname === '/admin/generate' && request.method === 'POST') {
+    if (url.pathname === "/admin/generate" && request.method === "POST") {
       return handleAdminGenerate(request, env);
     }
-
-    if (url.pathname === '/admin/send' && request.method === 'POST') {
+    if (url.pathname === "/admin/send" && request.method === "POST") {
       return handleAdminSend(request, env);
     }
-
-    if (url.pathname === '/admin/cron-logs' && request.method === 'POST') {
+    if (url.pathname === "/admin/cron-logs" && request.method === "POST") {
       return handleCronLogs(request, env);
     }
-
-    if (url.pathname === '/admin/social' && request.method === 'POST') {
+    if (url.pathname === "/admin/social" && request.method === "POST") {
       return handleSocialGen(request, env);
     }
-
-    if (url.pathname === '/admin/wrap' && request.method === 'POST') {
+    if (url.pathname === "/admin/wrap" && request.method === "POST") {
       return handleAdminWrap(request, env);
     }
-
-    if (url.pathname === '/admin/list-issues' && request.method === 'POST') {
+    if (url.pathname === "/admin/list-issues" && request.method === "POST") {
       return handleAdminListIssues(request, env);
     }
-
-    if (url.pathname === '/admin/delete-issue' && request.method === 'POST') {
+    if (url.pathname === "/admin/delete-issue" && request.method === "POST") {
       return handleAdminDeleteIssue(request, env);
     }
-
-    if (url.pathname === '/favicon.ico') {
-      return Response.redirect(new URL('/logo.png', request.url).href, 301);
+    if (url.pathname === "/favicon.ico") {
+      return Response.redirect(new URL("/logo.png", request.url).href, 301);
     }
-
-    if (url.pathname === '/logo.png') {
+    if (url.pathname === "/logo.png") {
       return handleLogo(env);
     }
-
-    if (url.pathname === '/') {
+    if (url.pathname === "/") {
       return handleLandingPage();
     }
-
-    return json({ error: 'Not found' }, 404);
+    return json({ error: "Not found" }, 404);
   },
-
   // ─── CRON TRIGGER ─────────────────────────────────────────────────────────
   // In wrangler.toml, add:
   //   [triggers]
   //   crons = ["0 11 * * 1", "0 11 * * 3", "0 11 * * 5"]
   //   (11am UTC / 7am EDT Mon, Wed, Fri)
   async scheduled(event, env, ctx) {
-    const ts = new Date().toISOString();
+    const ts = (/* @__PURE__ */ new Date()).toISOString();
     const issueType = getIssueType();
-    const log = { event: 'cron', issueType, firedAt: ts, status: 'started' };
-    console.log('Cron triggered:', ts, issueType);
-
+    const log = { event: "cron", issueType, firedAt: ts, status: "started" };
+    console.log("Cron triggered:", ts, issueType);
     try {
       const newsletter = await generateNewsletter(env, issueType);
       log.subject = newsletter.subject;
-      log.status = 'generated';
-      console.log('Newsletter generated:', newsletter.subject);
-
+      log.status = "generated";
+      console.log("Newsletter generated:", newsletter.subject);
       const result = await sendToAllSubscribers(newsletter, env);
       log.sent = result.sent;
       log.failed = result.failed;
-      log.status = 'sent';
-      console.log('Newsletter sent:', result.sent, 'delivered,', result.failed, 'failed');
+      log.status = "sent";
+      console.log("Newsletter sent:", result.sent, "delivered,", result.failed, "failed");
     } catch (e) {
-      log.status = 'error';
+      log.status = "error";
       log.error = e.message;
-      console.error('Cron error:', e.message, e.stack);
+      console.error("Cron error:", e.message, e.stack);
     }
-
-    // Persist cron log to KV so we can check it later
     try {
       await env.CONTENT.put(`cron:${ts}`, JSON.stringify(log));
-    } catch (_) { /* best effort */ }
-  },
+    } catch (_) {
+    }
+  }
 };
-
-// ─── SUBSCRIBE HANDLER ───────────────────────────────────────────────────────
 async function handleSubscribe(request, env) {
   let body;
   try {
     body = await request.json();
   } catch {
-    return json({ error: 'Invalid JSON' }, 400);
+    return json({ error: "Invalid JSON" }, 400);
   }
-
   const { firstName, lastName, email } = body;
-
-  if (!email || !email.includes('@')) {
-    return json({ error: 'Valid email is required' }, 400);
+  if (!email || !email.includes("@")) {
+    return json({ error: "Valid email is required" }, 400);
   }
-
   const key = `sub:${email.toLowerCase().trim()}`;
   const subscriber = {
-    firstName: firstName || '',
-    lastName: lastName || '',
+    firstName: firstName || "",
+    lastName: lastName || "",
     email: email.toLowerCase().trim(),
-    subscribedAt: new Date().toISOString(),
-    active: true,
+    subscribedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    active: true
   };
-
   await env.SUBSCRIBERS.put(key, JSON.stringify(subscriber));
-
-  // Optional: send welcome email
   try {
     await sendEmail(
       { email: subscriber.email, firstName: subscriber.firstName },
       welcomeEmailHtml(subscriber.firstName),
-      `Welcome to ShieldSmart — Your Cyber Safety Newsletter`,
+      `Welcome to ShieldSmart \u2014 Your Cyber Safety Newsletter`,
       env
     );
   } catch (e) {
-    console.error('Welcome email failed:', e.message);
-    // Don't fail the subscription if welcome email fails
+    console.error("Welcome email failed:", e.message);
   }
-
-  return json({ success: true, message: 'Subscribed successfully!' });
+  return json({ success: true, message: "Subscribed successfully!" });
 }
-
-// ─── LIST SUBSCRIBERS (ADMIN) ────────────────────────────────────────────────
+__name(handleSubscribe, "handleSubscribe");
 async function handleListSubscribers(request, env) {
   if (!isAdmin(request, env)) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
-  const list = await env.SUBSCRIBERS.list({ prefix: 'sub:' });
+  const list = await env.SUBSCRIBERS.list({ prefix: "sub:" });
   const subscribers = [];
-
   for (const key of list.keys) {
     const val = await env.SUBSCRIBERS.get(key.name);
     if (val) subscribers.push(JSON.parse(val));
   }
-
   return json({ count: subscribers.length, subscribers });
 }
-
-// ─── GENERATE NEWSLETTER (ADMIN OR CRON) ────────────────────────────────────
+__name(handleListSubscribers, "handleListSubscribers");
 async function handleGenerate(request, env) {
   if (!isAdmin(request, env)) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
   const url = new URL(request.url);
-  const type = url.searchParams.get('type') || getIssueType();
+  const type = url.searchParams.get("type") || getIssueType();
   const newsletter = await generateNewsletter(env, type);
-
   return html(newsletter.html);
 }
-
-// ─── SEND TO ALL (ADMIN) ─────────────────────────────────────────────────────
+__name(handleGenerate, "handleGenerate");
 async function handleSend(request, env) {
   if (!isAdmin(request, env)) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
   const url = new URL(request.url);
-  const type = url.searchParams.get('type') || getIssueType();
+  const type = url.searchParams.get("type") || getIssueType();
   const newsletter = await generateNewsletter(env, type);
   const result = await sendToAllSubscribers(newsletter, env);
-
   return json({ success: true, ...result });
 }
-
-// ─── ADMIN: GENERATE FROM READER QUESTION ───────────────────────────────────
+__name(handleSend, "handleSend");
 async function handleAdminGenerate(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
-  const question = (body.question || '').trim();
-  const issueType = body.issueType || 'friday';
-  const readerName = (body.readerName || '').trim();
+  const question = (body.question || "").trim();
+  const issueType = body.issueType || "friday";
+  const readerName = (body.readerName || "").trim();
   if (!question) {
-    return json({ error: 'Question is required' }, 400);
+    return json({ error: "Question is required" }, 400);
   }
-
   const newsletter = await generateQuestionNewsletter(env, question, issueType, readerName);
   return json({ success: true, subject: newsletter.subject, html: newsletter.html, issueType: newsletter.issueType });
 }
-
+__name(handleAdminGenerate, "handleAdminGenerate");
 async function handleAdminSend(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
   const { subject, htmlContent, issueType } = body;
   if (!subject || !htmlContent) {
-    return json({ error: 'subject and htmlContent are required' }, 400);
+    return json({ error: "subject and htmlContent are required" }, 400);
   }
-
-  const newsletter = { subject, html: htmlContent, issueType: issueType || 'friday' };
+  const newsletter = { subject, html: htmlContent, issueType: issueType || "friday" };
   const result = await sendToAllSubscribers(newsletter, env);
   return json({ success: true, ...result });
 }
-
-// ─── CRON LOG VIEWER ─────────────────────────────────────────────────────────
+__name(handleAdminSend, "handleAdminSend");
 async function handleCronLogs(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
-  const list = await env.CONTENT.list({ prefix: 'cron:' });
+  const list = await env.CONTENT.list({ prefix: "cron:" });
   const logs = [];
   const keys = list.keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 20);
   for (const key of keys) {
@@ -305,48 +231,38 @@ async function handleCronLogs(request, env) {
   }
   return json({ logs });
 }
-
-// ─── WRAP CUSTOM NEWSLETTER ──────────────────────────────────────────────────
+__name(handleCronLogs, "handleCronLogs");
 async function handleAdminWrap(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
   const { subject, rawHtml, issueType } = body;
   if (!subject || !rawHtml) {
-    return json({ error: 'subject and rawHtml are required' }, 400);
+    return json({ error: "subject and rawHtml are required" }, 400);
   }
-
-  const type = issueType || 'monday';
+  const type = issueType || "monday";
   const fullHtml = wrapInEmailShell(rawHtml, subject, type);
-
-  // Save to archive (with unique suffix to avoid overwriting scheduled issues)
   try {
-    const ds = new Date().toISOString().split('T')[0];
+    const ds = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
     const suffix = Date.now().toString(36);
     const archiveKey = `issue:${ds}-${type}-${suffix}`;
-    const meta = { id: archiveKey, subject, issueType: type, generatedAt: new Date().toISOString(), dateStr: ds };
+    const meta = { id: archiveKey, subject, issueType: type, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), dateStr: ds };
     await env.CONTENT.put(archiveKey, fullHtml);
     await env.CONTENT.put(`${archiveKey}:body`, rawHtml);
     await env.CONTENT.put(`${archiveKey}:meta`, JSON.stringify(meta));
-  } catch (_) {}
-
+  } catch (_) {
+  }
   return json({ success: true, subject, html: fullHtml, issueType: type });
 }
-
-// ─── ADMIN LIST ISSUES ───────────────────────────────────────────────────────
+__name(handleAdminWrap, "handleAdminWrap");
 async function handleAdminListIssues(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
-  const list = await env.CONTENT.list({ prefix: 'issue:' });
-  const metaKeys = list.keys
-    .filter(k => k.name.endsWith(':meta'))
-    .sort((a, b) => b.name.localeCompare(a.name));
-
+  const list = await env.CONTENT.list({ prefix: "issue:" });
+  const metaKeys = list.keys.filter((k) => k.name.endsWith(":meta")).sort((a, b) => b.name.localeCompare(a.name));
   const issues = [];
   for (const key of metaKeys) {
     const val = await env.CONTENT.get(key.name);
@@ -354,65 +270,54 @@ async function handleAdminListIssues(request, env) {
   }
   return json({ issues });
 }
-
-// ─── ADMIN DELETE ISSUE ──────────────────────────────────────────────────────
+__name(handleAdminListIssues, "handleAdminListIssues");
 async function handleAdminDeleteIssue(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
   const id = body.id;
-  if (!id) return json({ error: 'id is required' }, 400);
-
+  if (!id) return json({ error: "id is required" }, 400);
   await env.CONTENT.delete(id);
-  await env.CONTENT.delete(id + ':body');
-  await env.CONTENT.delete(id + ':meta');
-
+  await env.CONTENT.delete(id + ":body");
+  await env.CONTENT.delete(id + ":meta");
   return json({ success: true, deleted: id });
 }
-
-// ─── SOCIAL POST GENERATOR ───────────────────────────────────────────────────
+__name(handleAdminDeleteIssue, "handleAdminDeleteIssue");
 async function handleSocialGen(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+    return json({ error: "Unauthorized" }, 401);
   }
-
-  const topic = (body.topic || '').trim();
-
-  // Grab the 3 most recent issue subjects as context
-  let recentIssues = '';
+  const topic = (body.topic || "").trim();
+  let recentIssues = "";
   try {
-    const list = await env.CONTENT.list({ prefix: 'issue:' });
-    const metaKeys = list.keys
-      .filter(k => k.name.endsWith(':meta'))
-      .sort((a, b) => b.name.localeCompare(a.name))
-      .slice(0, 3);
+    const list = await env.CONTENT.list({ prefix: "issue:" });
+    const metaKeys = list.keys.filter((k) => k.name.endsWith(":meta")).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 3);
     const items = [];
     for (const key of metaKeys) {
       const val = await env.CONTENT.get(key.name);
-      if (val) { const m = JSON.parse(val); items.push(m.subject); }
+      if (val) {
+        const m = JSON.parse(val);
+        items.push(m.subject);
+      }
     }
-    if (items.length) recentIssues = '\nRecent newsletter topics for context:\n' + items.map(s => '- ' + s).join('\n');
-  } catch (_) {}
-
-  const topicInstruction = topic
-    ? `The admin wants posts specifically about this topic or angle: "${topic}"`
-    : 'Pick an attention-grabbing cyber safety angle relevant this week.';
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+    if (items.length) recentIssues = "\nRecent newsletter topics for context:\n" + items.map((s) => "- " + s).join("\n");
+  } catch (_) {
+  }
+  const topicInstruction = topic ? `The admin wants posts specifically about this topic or angle: "${topic}"` : "Pick an attention-grabbing cyber safety angle relevant this week.";
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      "Content-Type": "application/json",
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-5',
-      max_tokens: 2000,
+      model: "claude-opus-4-5",
+      max_tokens: 2e3,
       system: `You write social media posts for ShieldSmart, a free cyber safety newsletter by XNL Tech. The newsletter delivers plain-English security tips 3x a week (Mon/Wed/Fri). The goal of every post is to get people to subscribe at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
-      messages: [{ role: 'user', content: `Generate social media posts to promote the ShieldSmart newsletter and drive subscriptions.
+      messages: [{ role: "user", content: `Generate social media posts to promote the ShieldSmart newsletter and drive subscriptions.
 
 ${topicInstruction}${recentIssues}
 
@@ -427,45 +332,34 @@ TWITTER:
 TWITTER_ALT:
 [A second Twitter/X post option, different angle, max 280 characters.]
 
-Output ONLY the posts in the exact format above. No commentary, no labels like "Here are", no markdown.` }],
-    }),
+Output ONLY the posts in the exact format above. No commentary, no labels like "Here are", no markdown.` }]
+    })
   });
-
   if (!response.ok) {
     const err = await response.text();
-    throw new Error('Anthropic API error: ' + err);
+    throw new Error("Anthropic API error: " + err);
   }
-
   const data = await response.json();
   const text = data.content[0].text.trim();
-
-  // Parse sections
   const fbMatch = text.match(/FACEBOOK:\s*\n([\s\S]*?)(?=\nTWITTER:|$)/i);
   const twMatch = text.match(/TWITTER:\s*\n([\s\S]*?)(?=\nTWITTER_ALT:|$)/i);
   const twAltMatch = text.match(/TWITTER_ALT:\s*\n([\s\S]*?)$/i);
-
   return json({
     success: true,
-    facebook: fbMatch ? fbMatch[1].trim() : '',
-    twitter: twMatch ? twMatch[1].trim() : '',
-    twitterAlt: twAltMatch ? twAltMatch[1].trim() : '',
+    facebook: fbMatch ? fbMatch[1].trim() : "",
+    twitter: twMatch ? twMatch[1].trim() : "",
+    twitterAlt: twAltMatch ? twAltMatch[1].trim() : ""
   });
 }
-
-// ─── GENERATE NEWSLETTER FROM READER QUESTION ────────────────────────────────
+__name(handleSocialGen, "handleSocialGen");
 async function generateQuestionNewsletter(env, readerQuestion, issueType, readerName) {
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
+  const today = /* @__PURE__ */ new Date();
+  const dateStr = today.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const system = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
 Your readers are everyday people who are NOT tech savvy. 
 Tone: helpful, practical, like your patient tech-savvy nephew or niece.
 CRITICAL: All content MUST be timely and current for ${dateStr}. Reference current OS versions (Windows 11, macOS Sonoma/Sequoia, iOS 18, Android 15), real software interfaces, and up-to-date solutions for ${today.getFullYear()}. Mention specific current scams in the scam alert section. Never give outdated advice or reference old software versions.`;
-
-  const nameInstruction = readerName
-    ? `The reader's first name is ${readerName}. You may use their first name when presenting the question (e.g., "${readerName} wrote in asking..."). Only use their first name — never invent a last name or location.`
-    : `Do NOT use any name — present it anonymously: "One of our readers wrote in asking..."`;
-
+  const nameInstruction = readerName ? `The reader's first name is ${readerName}. You may use their first name when presenting the question (e.g., "${readerName} wrote in asking..."). Only use their first name \u2014 never invent a last name or location.` : `Do NOT use any name \u2014 present it anonymously: "One of our readers wrote in asking..."`;
   const prompt = `Today's date is ${dateStr}. A real reader submitted this question to help@xnltech.com:
 
 "${readerQuestion}"
@@ -477,61 +371,54 @@ SUBJECT: [emoji] Your catchy subject line here
 The subject MUST directly reference the reader's question. Then leave a blank line and begin the HTML body.
 
 Structure:
-1. **Happy Friday opener** (2 sentences — light and friendly)
-2. **Reader Question** — Present the question naturally. ${nameInstruction}
-3. **The Fix** — Step-by-step solution in plain language. Use numbered steps. Cover both Windows and Mac if relevant. (5-8 steps)
-4. **Bonus Tip** — One related quick tip that makes their digital life easier or safer
-5. **Scam Alert Reminder** — One sentence reminder about common scams related to this topic
-6. **Weekend Safety Reminder** — One quick safety reminder for the weekend
+1. **Happy Friday opener** (2 sentences \u2014 light and friendly)
+2. **Reader Question** \u2014 Present the question naturally. ${nameInstruction}
+3. **The Fix** \u2014 Step-by-step solution in plain language. Use numbered steps. Cover both Windows and Mac if relevant. (5-8 steps)
+4. **Bonus Tip** \u2014 One related quick tip that makes their digital life easier or safer
+5. **Scam Alert Reminder** \u2014 One sentence reminder about common scams related to this topic
+6. **Weekend Safety Reminder** \u2014 One quick safety reminder for the weekend
 7. **Warm Friday sign-off** from the ShieldSmart Team at XNL Tech
 
 Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, muted text #7A8070. Max-width 900px.
 DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the Friday opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`;
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+DO NOT invite readers to "reply to this email" \u2014 replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
+IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html \u2014 just the raw HTML content starting directly with your first tag.`;
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      "Content-Type": "application/json",
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-5',
-      max_tokens: 8000,
+      model: "claude-opus-4-5",
+      max_tokens: 8e3,
       system,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+      messages: [{ role: "user", content: prompt }]
+    })
   });
-
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`Anthropic API error: ${err}`);
   }
-
   const data = await response.json();
   let rawHtml = data.content[0].text;
-  rawHtml = rawHtml.replace(/```html\s*/gi, '').replace(/```\s*/gi, '').trim();
-
-  let subject = generateSubject('friday');
+  rawHtml = rawHtml.replace(/```html\s*/gi, "").replace(/```\s*/gi, "").trim();
+  let subject = generateSubject("friday");
   const subjectMatch = rawHtml.match(/^SUBJECT:\s*(.+)/i);
   if (subjectMatch) {
     subject = subjectMatch[1].trim();
-    rawHtml = rawHtml.replace(/^SUBJECT:\s*.+\n?\n?/i, '').trim();
+    rawHtml = rawHtml.replace(/^SUBJECT:\s*.+\n?\n?/i, "").trim();
   }
-
   const fullHtml = wrapInEmailShell(rawHtml, subject, issueType);
-
   const newsletter = {
     subject,
     html: fullHtml,
     issueType,
-    generatedAt: new Date().toISOString(),
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-
   try {
-    const ds = new Date().toISOString().split('T')[0];
+    const ds = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
     const suffix = Date.now().toString(36);
     const archiveKey = `issue:${ds}-${issueType}-${suffix}`;
     const meta = {
@@ -539,40 +426,32 @@ IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \
       subject: newsletter.subject,
       issueType: newsletter.issueType,
       generatedAt: newsletter.generatedAt,
-      dateStr: ds,
+      dateStr: ds
     };
     await env.CONTENT.put(archiveKey, fullHtml);
     await env.CONTENT.put(`${archiveKey}:body`, rawHtml);
     await env.CONTENT.put(`${archiveKey}:meta`, JSON.stringify(meta));
   } catch (e) {
-    console.error('Failed to save to archive:', e.message);
+    console.error("Failed to save to archive:", e.message);
   }
-
   return newsletter;
 }
-
-// ─── ISSUE TYPE LOGIC ────────────────────────────────────────────────────────
+__name(generateQuestionNewsletter, "generateQuestionNewsletter");
 function getIssueType() {
-  const day = new Date().getDay(); // 0=Sun, 1=Mon, 3=Wed, 5=Fri
-  if (day === 1) return 'monday';
-  if (day === 3) return 'wednesday';
-  if (day === 5) return 'friday';
-  return 'monday'; // default
+  const day = (/* @__PURE__ */ new Date()).getDay();
+  if (day === 1) return "monday";
+  if (day === 3) return "wednesday";
+  if (day === 5) return "friday";
+  return "monday";
 }
-
-// ─── GENERATE WITH ANTHROPIC ─────────────────────────────────────────────────
+__name(getIssueType, "getIssueType");
 async function generateNewsletter(env, issueType) {
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-  // Fetch recent issue subjects to avoid repeating topics
-  let recentTopics = '';
+  const today = /* @__PURE__ */ new Date();
+  const dateStr = today.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  let recentTopics = "";
   try {
-    const list = await env.CONTENT.list({ prefix: 'issue:' });
-    const metaKeys = list.keys
-      .filter(k => k.name.endsWith(':meta'))
-      .sort((a, b) => b.name.localeCompare(a.name))
-      .slice(0, 12);
+    const list = await env.CONTENT.list({ prefix: "issue:" });
+    const metaKeys = list.keys.filter((k) => k.name.endsWith(":meta")).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 12);
     const subjects = [];
     for (const key of metaKeys) {
       const val = await env.CONTENT.get(key.name);
@@ -582,43 +461,47 @@ async function generateNewsletter(env, issueType) {
       }
     }
     if (subjects.length > 0) {
-      recentTopics = `\n\nIMPORTANT — DO NOT repeat these topics already covered in recent issues:\n${subjects.map(s => `- ${s}`).join('\n')}\nChoose a COMPLETELY DIFFERENT topic that has NOT been covered above.`;
-    }
-  } catch(e) { /* continue without recent topics */ }
+      recentTopics = `
 
+IMPORTANT \u2014 DO NOT repeat these topics already covered in recent issues:
+${subjects.map((s) => `- ${s}`).join("\n")}
+Choose a COMPLETELY DIFFERENT topic that has NOT been covered above.`;
+    }
+  } catch (e) {
+  }
   const prompts = {
     monday: {
-      fallbackSubject: generateSubject('monday'),
+      fallbackSubject: generateSubject("monday"),
       system: `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
-Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy. 
+Your readers are everyday people \u2014 seniors, parents, non-tech workers \u2014 who are NOT tech savvy. 
 Your tone is: warm, protective, like a knowledgeable friend who happens to work in cybersecurity.
 NEVER use jargon without immediately explaining it in plain English.
 Write as if you're talking to your mom or grandparent.
-CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats that are ACTIVELY circulating right now in ${today.getFullYear()}. Include specific, realistic details — which platforms are affected, what the scam messages look like, and any recent warnings from the FTC, FBI, or cybersecurity agencies. Never write generic or outdated content.`,
+CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats that are ACTIVELY circulating right now in ${today.getFullYear()}. Include specific, realistic details \u2014 which platforms are affected, what the scam messages look like, and any recent warnings from the FTC, FBI, or cybersecurity agencies. Never write generic or outdated content.`,
       prompt: `Today's date is ${dateStr}. Write a Monday "Threat Radar" newsletter issue. 
 
 IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact format:
 SUBJECT: [emoji] Your catchy subject line here
 The subject MUST directly reference the specific threat covered in the issue. Then leave a blank line and begin the HTML body.
 
-Pick from a WIDE variety of real threats — examples include (but don't limit yourself to): fake delivery texts, AI voice cloning scams, QR code phishing, fake tech support popups, romance scams, cryptocurrency fraud, fake job offers, grandparent scams, SIM swapping, malicious browser extensions, fake Wi-Fi hotspots, social media impersonation, fake charity scams, smishing attacks, deepfake video fraud, parking meter QR scams, fake app store apps, USB drop attacks, business email compromise, fake invoice scams. Always pick something DIFFERENT from recent issues.${recentTopics}
+Pick from a WIDE variety of real threats \u2014 examples include (but don't limit yourself to): fake delivery texts, AI voice cloning scams, QR code phishing, fake tech support popups, romance scams, cryptocurrency fraud, fake job offers, grandparent scams, SIM swapping, malicious browser extensions, fake Wi-Fi hotspots, social media impersonation, fake charity scams, smishing attacks, deepfake video fraud, parking meter QR scams, fake app store apps, USB drop attacks, business email compromise, fake invoice scams. Always pick something DIFFERENT from recent issues.${recentTopics}
 
 Structure:
 1. **Friendly opener** (2-3 sentences, warm, urgent but not scary)
-2. **This Week's Threat** — Pick one very real, current scam or hacking tactic. Name it clearly. (e.g., "The Fake Bank Text Scam")
-3. **How It Works** — Explain it step by step like a story. What happens? What do they want? (3-4 paragraphs, PLAIN English)
-4. **How To Spot It** — 3-5 clear bullet points with specific, concrete signs
-5. **What To Do If You Get One** — Numbered action steps (keep it simple: 3-4 steps)
-6. **Quick Win** — One 30-second thing they can do RIGHT NOW to be safer
-7. **Closing** — Warm, encouraging sign-off from "The ShieldSmart Team at XNL Tech"
+2. **This Week's Threat** \u2014 Pick one very real, current scam or hacking tactic. Name it clearly. (e.g., "The Fake Bank Text Scam")
+3. **How It Works** \u2014 Explain it step by step like a story. What happens? What do they want? (3-4 paragraphs, PLAIN English)
+4. **How To Spot It** \u2014 3-5 clear bullet points with specific, concrete signs
+5. **What To Do If You Get One** \u2014 Numbered action steps (keep it simple: 3-4 steps)
+6. **Quick Win** \u2014 One 30-second thing they can do RIGHT NOW to be safer
+7. **Closing** \u2014 Warm, encouraging sign-off from "The ShieldSmart Team at XNL Tech"
 
 Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered. Make it visually engaging with colored callout boxes.
 DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the friendly opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`,
+DO NOT invite readers to "reply to this email" \u2014 replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
+IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html \u2014 just the raw HTML content starting directly with your first tag.`
     },
     wednesday: {
-      fallbackSubject: generateSubject('wednesday'),
+      fallbackSubject: generateSubject("wednesday"),
       system: `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
 Your readers are everyday people who are NOT tech savvy. 
 Tone: encouraging, simple, like a patient teacher. Make people feel CAPABLE, not overwhelmed.
@@ -629,23 +512,23 @@ IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact for
 SUBJECT: [emoji] Your catchy subject line here
 The subject MUST directly reference the specific skill taught in the issue. Then leave a blank line and begin the HTML body.
 
-Pick from a WIDE variety of safety skills — examples include (but don't limit yourself to): setting up two-factor authentication, creating strong passwords, using a password manager, checking app permissions, spotting phishing emails, securing home Wi-Fi, enabling automatic updates, backing up your phone, reviewing privacy settings on Facebook/Instagram, recognizing fake websites, setting up Find My Phone, creating a PIN for your SIM card, encrypting your phone, clearing saved passwords from browsers, checking for data breaches, setting up login alerts, using a VPN on public Wi-Fi, reviewing connected apps, enabling biometric login, setting up email filters. Always pick something DIFFERENT from recent issues.${recentTopics}
+Pick from a WIDE variety of safety skills \u2014 examples include (but don't limit yourself to): setting up two-factor authentication, creating strong passwords, using a password manager, checking app permissions, spotting phishing emails, securing home Wi-Fi, enabling automatic updates, backing up your phone, reviewing privacy settings on Facebook/Instagram, recognizing fake websites, setting up Find My Phone, creating a PIN for your SIM card, encrypting your phone, clearing saved passwords from browsers, checking for data breaches, setting up login alerts, using a VPN on public Wi-Fi, reviewing connected apps, enabling biometric login, setting up email filters. Always pick something DIFFERENT from recent issues.${recentTopics}
 
 Structure:
-1. **Opener** — "This Wednesday, we're building one simple habit" (2 sentences)
-2. **The Skill** — ONE specific security habit or setting. Give it a plain-language name.
-3. **Why It Matters** — A brief real-world story or example showing what happens without this skill (2 paragraphs)
-4. **How To Do It** — Step-by-step instructions with numbered steps. Write as if guiding someone by phone. Specify: iPhone vs Android or Windows vs Mac where relevant.
-5. **You Did It!** — Brief celebration + what this skill protects them from
+1. **Opener** \u2014 "This Wednesday, we're building one simple habit" (2 sentences)
+2. **The Skill** \u2014 ONE specific security habit or setting. Give it a plain-language name.
+3. **Why It Matters** \u2014 A brief real-world story or example showing what happens without this skill (2 paragraphs)
+4. **How To Do It** \u2014 Step-by-step instructions with numbered steps. Write as if guiding someone by phone. Specify: iPhone vs Android or Windows vs Mac where relevant.
+5. **You Did It!** \u2014 Brief celebration + what this skill protects them from
 6. **Closing** from the ShieldSmart Team at XNL Tech
 
 Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, muted text #7A8070. Max-width 900px. Include a visible "Steps" section with numbered boxes.
 DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`,
+DO NOT invite readers to "reply to this email" \u2014 replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
+IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html \u2014 just the raw HTML content starting directly with your first tag.`
     },
     friday: {
-      fallbackSubject: generateSubject('friday'),
+      fallbackSubject: generateSubject("friday"),
       system: `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
 Your readers are everyday people who are NOT tech savvy. 
 Tone: helpful, practical, like your patient tech-savvy nephew or niece.
@@ -656,111 +539,86 @@ IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact for
 SUBJECT: [emoji] Your catchy subject line here
 The subject MUST directly reference the specific question or fix covered in the issue. Then leave a blank line and begin the HTML body.
 
-Pick from a WIDE variety of real reader-style questions — examples include (but don't limit yourself to): slow computer fix, too many browser tabs, phone storage full, printer won't connect, suspicious email received, forgot password recovery, phone battery draining fast, computer won't start, weird pop-ups appearing, email got hacked, too many spam calls, Wi-Fi keeps disconnecting, computer fan running loud, accidentally clicked a bad link, how to transfer photos, screen frozen, Bluetooth won't pair, mystery charges on phone bill, apps crashing constantly, how to clear cookies. Always pick something DIFFERENT from recent issues.${recentTopics}
+Pick from a WIDE variety of real reader-style questions \u2014 examples include (but don't limit yourself to): slow computer fix, too many browser tabs, phone storage full, printer won't connect, suspicious email received, forgot password recovery, phone battery draining fast, computer won't start, weird pop-ups appearing, email got hacked, too many spam calls, Wi-Fi keeps disconnecting, computer fan running loud, accidentally clicked a bad link, how to transfer photos, screen frozen, Bluetooth won't pair, mystery charges on phone bill, apps crashing constantly, how to clear cookies. Always pick something DIFFERENT from recent issues.${recentTopics}
 
 Structure:
-1. **Happy Friday opener** (2 sentences — light and friendly)
-2. **This Week's Topic** — Introduce a common tech problem or frustration that many people deal with (e.g., "Wi-Fi keeps dropping", "Phone storage is full"). Frame it naturally without pretending a specific person asked it.
-3. **The Fix** — Step-by-step solution in plain language. Use numbered steps. Cover both Windows and Mac if relevant. (5-8 steps)
-4. **Bonus Tip** — One related quick tip that makes their digital life easier or safer
-5. **Scam Alert Reminder** — One sentence reminder about the most common scam circulating this week
-6. **Weekend Safety Reminder** — One quick safety reminder for the weekend
+1. **Happy Friday opener** (2 sentences \u2014 light and friendly)
+2. **This Week's Topic** \u2014 Introduce a common tech problem or frustration that many people deal with (e.g., "Wi-Fi keeps dropping", "Phone storage is full"). Frame it naturally without pretending a specific person asked it.
+3. **The Fix** \u2014 Step-by-step solution in plain language. Use numbered steps. Cover both Windows and Mac if relevant. (5-8 steps)
+4. **Bonus Tip** \u2014 One related quick tip that makes their digital life easier or safer
+5. **Scam Alert Reminder** \u2014 One sentence reminder about the most common scam circulating this week
+6. **Weekend Safety Reminder** \u2014 One quick safety reminder for the weekend
 7. **Warm Friday sign-off** from the ShieldSmart Team at XNL Tech
 
 Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, muted text #7A8070. Max-width 900px. Include a visible Q&A styled section.
 DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the Friday opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`,
-    },
+DO NOT invite readers to "reply to this email" \u2014 replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
+IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html \u2014 just the raw HTML content starting directly with your first tag.`
+    }
   };
-
-  // TODO: Future paid subscription feature — add a "Reader Question Box" back to the
-  // Friday prompt with a CTA button for paid subscribers to get personalized help.
-  // Could include a "Get Help" button linking to a paid subscription/support tier.
-
   const config = prompts[issueType] || prompts.monday;
-
-  // Call Anthropic API
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      "Content-Type": "application/json",
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-5',
-      max_tokens: 8000,
+      model: "claude-opus-4-5",
+      max_tokens: 8e3,
       system: config.system,
       messages: [
         {
-          role: 'user',
-          content: config.prompt,
-        },
-      ],
-    }),
+          role: "user",
+          content: config.prompt
+        }
+      ]
+    })
   });
-
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`Anthropic API error: ${err}`);
   }
-
   const data = await response.json();
   let rawHtml = data.content[0].text;
-
-  // Aggressively strip any code fences no matter where they appear
-  rawHtml = rawHtml
-    .replace(/```html\s*/gi, '')
-    .replace(/```\s*/gi, '')
-    .trim();
-
-  // Extract AI-generated subject line from the first line (format: "SUBJECT: ...")
+  rawHtml = rawHtml.replace(/```html\s*/gi, "").replace(/```\s*/gi, "").trim();
   let subject = config.fallbackSubject;
   const subjectMatch = rawHtml.match(/^SUBJECT:\s*(.+)/i);
   if (subjectMatch) {
     subject = subjectMatch[1].trim();
-    rawHtml = rawHtml.replace(/^SUBJECT:\s*.+\n?\n?/i, '').trim();
+    rawHtml = rawHtml.replace(/^SUBJECT:\s*.+\n?\n?/i, "").trim();
   }
-
-  // Wrap in full email shell
   const fullHtml = wrapInEmailShell(rawHtml, subject, issueType);
-
   const newsletter = {
     subject,
     html: fullHtml,
     issueType,
-    generatedAt: new Date().toISOString(),
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-
-  // ── Save to archive in KV ──
   try {
-    const dateStr = new Date().toISOString().split('T')[0]; // e.g. 2026-03-14
+    const dateStr2 = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
     const suffix = Date.now().toString(36);
-    const archiveKey = `issue:${dateStr}-${issueType}-${suffix}`;
+    const archiveKey = `issue:${dateStr2}-${issueType}-${suffix}`;
     const meta = {
       id: archiveKey,
       subject: newsletter.subject,
       issueType: newsletter.issueType,
       generatedAt: newsletter.generatedAt,
-      dateStr,
+      dateStr: dateStr2
     };
-    // Store full HTML separately, store metadata in index
     await env.CONTENT.put(archiveKey, fullHtml);
     await env.CONTENT.put(`${archiveKey}:body`, rawHtml);
     await env.CONTENT.put(`${archiveKey}:meta`, JSON.stringify(meta));
   } catch (e) {
-    console.error('Failed to save to archive:', e.message);
+    console.error("Failed to save to archive:", e.message);
   }
-
   return newsletter;
 }
-
-// ─── EMAIL SHELL WRAPPER ─────────────────────────────────────────────────────
+__name(generateNewsletter, "generateNewsletter");
 function wrapInEmailShell(innerHtml, subject, issueType) {
-  const dayLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-  const label = dayLabel[issueType] || 'ShieldSmart';
-
+  const dayLabel = { monday: "Threat Radar", wednesday: "Safety Skill", friday: "Fix-It Help Desk" };
+  const label = dayLabel[issueType] || "ShieldSmart";
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -845,19 +703,16 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
 </body>
 </html>`;
 }
-
-// ─── SEND TO ALL SUBSCRIBERS ─────────────────────────────────────────────────
+__name(wrapInEmailShell, "wrapInEmailShell");
 async function sendToAllSubscribers(newsletter, env) {
-  const list = await env.SUBSCRIBERS.list({ prefix: 'sub:' });
+  const list = await env.SUBSCRIBERS.list({ prefix: "sub:" });
   let sent = 0;
   let failed = 0;
-
   for (const key of list.keys) {
     const val = await env.SUBSCRIBERS.get(key.name);
     if (!val) continue;
     const subscriber = JSON.parse(val);
     if (!subscriber.active) continue;
-
     try {
       await sendEmail(subscriber, newsletter.html, newsletter.subject, env);
       sent++;
@@ -866,45 +721,39 @@ async function sendToAllSubscribers(newsletter, env) {
       failed++;
     }
   }
-
   return { sent, failed, total: list.keys.length };
 }
-
-// ─── EMAIL SENDER (Resend) ───────────────────────────────────────────────────
+__name(sendToAllSubscribers, "sendToAllSubscribers");
 async function sendEmail(subscriber, htmlContent, subject, env) {
   if (!env.SEND_API_KEY) {
     console.log(`[DEMO] Would send "${subject}" to ${subscriber.email}`);
     return;
   }
-
   const personalizedHtml = htmlContent.replace(
-    '{unsubscribe_url}',
+    "{unsubscribe_url}",
     `https://xnltech.com/unsubscribe?email=${encodeURIComponent(subscriber.email)}`
   );
-
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
     headers: {
-      'Authorization': `Bearer ${env.SEND_API_KEY}`,
-      'Content-Type': 'application/json',
+      "Authorization": `Bearer ${env.SEND_API_KEY}`,
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      from: env.SEND_FROM || 'ShieldSmart <noreply@xnltech.com>',
+      from: env.SEND_FROM || "ShieldSmart <noreply@xnltech.com>",
       to: subscriber.email,
-      subject: subject,
-      html: personalizedHtml,
-    }),
+      subject,
+      html: personalizedHtml
+    })
   });
-
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`Resend error: ${err}`);
   }
 }
-
-// ─── WELCOME EMAIL ───────────────────────────────────────────────────────────
+__name(sendEmail, "sendEmail");
 function welcomeEmailHtml(firstName) {
-  const name = firstName || 'there';
+  const name = firstName || "there";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -938,7 +787,7 @@ function welcomeEmailHtml(firstName) {
           <td bgcolor="#1E201E" style="background-color:#1E201E;padding:32px;">
             <h2 style="color:#BCE600;font-family:Arial,sans-serif;font-size:24px;margin:0 0 16px;">Welcome to ShieldSmart, ${name}! &#127737;</h2>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 16px;">
-              You just took the first step toward protecting yourself online — and we're genuinely proud of you for it.
+              You just took the first step toward protecting yourself online \u2014 and we're genuinely proud of you for it.
             </p>
 
             <!-- Mission -->
@@ -947,7 +796,7 @@ function welcomeEmailHtml(firstName) {
                 <td bgcolor="#111311" style="background-color:#111311;padding:20px 24px;border-radius:8px;border-left:4px solid #BCE600;">
                   <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Our Mission</p>
                   <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0;">
-                    At <strong>XNL Tech</strong>, we believe everyone deserves to feel safe online — not just the tech-savvy. Scammers and hackers count on regular people feeling confused and overwhelmed. We're here to change that. ShieldSmart breaks down real cyber threats into <strong style="color:#BCE600;">plain English</strong> so you can protect yourself, your family, and your community — no tech degree required.
+                    At <strong>XNL Tech</strong>, we believe everyone deserves to feel safe online \u2014 not just the tech-savvy. Scammers and hackers count on regular people feeling confused and overwhelmed. We're here to change that. ShieldSmart breaks down real cyber threats into <strong style="color:#BCE600;">plain English</strong> so you can protect yourself, your family, and your community \u2014 no tech degree required.
                   </p>
                 </td>
               </tr>
@@ -958,7 +807,7 @@ function welcomeEmailHtml(firstName) {
               <strong style="color:#BCE600;">This newsletter is just the beginning.</strong>
             </p>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 20px;">
-              We're building a community of people who look out for each other. The more of us who know how to spot scams, lock down our accounts, and stay safe — the harder we make it for the bad guys. Your inbox is our starting point, but the real goal is a world where nobody falls for these tricks.
+              We're building a community of people who look out for each other. The more of us who know how to spot scams, lock down our accounts, and stay safe \u2014 the harder we make it for the bad guys. Your inbox is our starting point, but the real goal is a world where nobody falls for these tricks.
             </p>
 
             <!-- Schedule -->
@@ -968,19 +817,19 @@ function welcomeEmailHtml(firstName) {
             <table width="100%" cellpadding="0" cellspacing="0" border="0">
               <tr>
                 <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
-                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128274; <strong>Mondays</strong> — We decode the week's biggest scam so you know exactly what to watch for</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128274; <strong>Mondays</strong> \u2014 We decode the week's biggest scam so you know exactly what to watch for</p>
                 </td>
               </tr>
               <tr><td style="height:8px;"></td></tr>
               <tr>
                 <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
-                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128161; <strong>Wednesdays</strong> — You learn one simple safety skill you can set up in minutes</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128161; <strong>Wednesdays</strong> \u2014 You learn one simple safety skill you can set up in minutes</p>
                 </td>
               </tr>
               <tr><td style="height:8px;"></td></tr>
               <tr>
                 <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
-                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128187; <strong>Fridays</strong> — We fix a common tech headache with plain-English steps</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128187; <strong>Fridays</strong> \u2014 We fix a common tech headache with plain-English steps</p>
                 </td>
               </tr>
             </table>
@@ -1008,7 +857,7 @@ function welcomeEmailHtml(firstName) {
                 <td bgcolor="#222522" style="background-color:#222522;padding:24px;border-radius:8px;text-align:center;border:1px solid #3A3D3A;">
                   <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:20px;font-weight:700;margin:0 0 8px;">&#128149; Help Someone You Care About</p>
                   <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 16px;">
-                    Think of one person — a parent, a friend, a neighbor — who could use a little help staying safe online. Forward this email to them, or share the link below. It's free, and it could save them from a scam.
+                    Think of one person \u2014 a parent, a friend, a neighbor \u2014 who could use a little help staying safe online. Forward this email to them, or share the link below. It's free, and it could save them from a scam.
                   </p>
                   <!--[if mso]>
                   <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://xnltech.com" style="height:44px;v-text-anchor:middle;width:280px;" arcsize="18%" strokecolor="#BCE600" fillcolor="#BCE600">
@@ -1030,7 +879,7 @@ function welcomeEmailHtml(firstName) {
               Questions? Reply to this email or write us at <a href="mailto:help@xnltech.com" style="color:#BCE600;text-decoration:none;">help@xnltech.com</a>
             </p>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;margin:20px 0 0;">
-              Stay safe out there — and help others do the same,<br/>
+              Stay safe out there \u2014 and help others do the same,<br/>
               <strong>The ShieldSmart Team</strong><br/>
               <span style="color:#7A8070;font-size:13px;">XNL Tech</span>
             </p>
@@ -1061,38 +910,35 @@ function welcomeEmailHtml(firstName) {
 </body>
 </html>`;
 }
-
-// ─── GENERATE DYNAMIC SUBJECT LINES ──────────────────────────────────────────
+__name(welcomeEmailHtml, "welcomeEmailHtml");
 function generateSubject(day) {
   const subjects = {
     monday: [
-      "🚨 This scam is making the rounds — here's how to dodge it",
-      "⚠️ Hackers tried a new trick this week. You need to see this.",
-      "🛡️ Before you click that email — read this first",
-      "🔍 Spotted: The scam hitting inboxes right now",
+      "\u{1F6A8} This scam is making the rounds \u2014 here's how to dodge it",
+      "\u26A0\uFE0F Hackers tried a new trick this week. You need to see this.",
+      "\u{1F6E1}\uFE0F Before you click that email \u2014 read this first",
+      "\u{1F50D} Spotted: The scam hitting inboxes right now"
     ],
     wednesday: [
-      "🔐 One setting that makes hackers give up on you",
-      "💡 Wednesday Skill: 2 minutes that could save your accounts",
-      "🛡️ Your Wednesday safety upgrade is here",
-      "✅ This one habit stops most hacks cold",
+      "\u{1F510} One setting that makes hackers give up on you",
+      "\u{1F4A1} Wednesday Skill: 2 minutes that could save your accounts",
+      "\u{1F6E1}\uFE0F Your Wednesday safety upgrade is here",
+      "\u2705 This one habit stops most hacks cold"
     ],
     friday: [
-      "🛠️ Fix-It Friday: Your tech question answered",
-      "💻 That annoying computer problem? Here's the fix.",
-      "🎉 Friday Help Desk — plus one quick safety reminder",
-      "🔧 Fix-It Friday: We're in your corner",
-    ],
+      "\u{1F6E0}\uFE0F Fix-It Friday: Your tech question answered",
+      "\u{1F4BB} That annoying computer problem? Here's the fix.",
+      "\u{1F389} Friday Help Desk \u2014 plus one quick safety reminder",
+      "\u{1F527} Fix-It Friday: We're in your corner"
+    ]
   };
   const list = subjects[day] || subjects.monday;
   return list[Math.floor(Math.random() * list.length)];
 }
-
-// ─── UNSUBSCRIBE PAGE (GET) ───────────────────────────────────────────────────
+__name(generateSubject, "generateSubject");
 async function handleUnsubscribePage(request, env) {
   const url = new URL(request.url);
-  const email = url.searchParams.get('email') || '';
-
+  const email = url.searchParams.get("email") || "";
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1131,36 +977,30 @@ async function handleUnsubscribePage(request, env) {
 </body>
 </html>`);
 }
-
-// ─── UNSUBSCRIBE SUBMIT (POST) ────────────────────────────────────────────────
+__name(handleUnsubscribePage, "handleUnsubscribePage");
 async function handleUnsubscribeSubmit(request, env) {
   let email;
-  const contentType = request.headers.get('content-type') || '';
-
-  if (contentType.includes('application/json')) {
+  const contentType = request.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
     const body = await request.json();
     email = body.email;
   } else {
     const formData = await request.formData();
-    email = formData.get('email');
+    email = formData.get("email");
   }
-
-  if (!email || !email.includes('@')) {
+  if (!email || !email.includes("@")) {
     return html(`<!DOCTYPE html><html><body style="background:#111311;color:#F2F5E8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;">
       <div><h2 style="color:#FF5C5C;">Invalid email address.</h2><br/><a href="/unsubscribe" style="color:#BCE600;">Try again</a></div>
     </body></html>`, 400);
   }
-
   const key = `sub:${email.toLowerCase().trim()}`;
   const existing = await env.SUBSCRIBERS.get(key);
-
   if (existing) {
     const subscriber = JSON.parse(existing);
     subscriber.active = false;
-    subscriber.unsubscribedAt = new Date().toISOString();
+    subscriber.unsubscribedAt = (/* @__PURE__ */ new Date()).toISOString();
     await env.SUBSCRIBERS.put(key, JSON.stringify(subscriber));
   }
-
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1190,50 +1030,39 @@ async function handleUnsubscribeSubmit(request, env) {
 </body>
 </html>`);
 }
-
-// ─── VERIFY SUBSCRIBER ───────────────────────────────────────────────────────
+__name(handleUnsubscribeSubmit, "handleUnsubscribeSubmit");
 async function handleVerifySubscriber(request, env) {
   let body;
-  try { body = await request.json(); } catch { return json({ verified: false }); }
-
-  const email = (body.email || '').toLowerCase().trim();
-  if (!email || !email.includes('@')) return json({ verified: false });
-
+  try {
+    body = await request.json();
+  } catch {
+    return json({ verified: false });
+  }
+  const email = (body.email || "").toLowerCase().trim();
+  if (!email || !email.includes("@")) return json({ verified: false });
   const val = await env.SUBSCRIBERS.get(`sub:${email}`);
-  if (!val) return json({ verified: false, reason: 'not_found' });
-
+  if (!val) return json({ verified: false, reason: "not_found" });
   const subscriber = JSON.parse(val);
-  if (!subscriber.active) return json({ verified: false, reason: 'unsubscribed' });
-
-  return json({ verified: true, firstName: subscriber.firstName || '' });
+  if (!subscriber.active) return json({ verified: false, reason: "unsubscribed" });
+  return json({ verified: true, firstName: subscriber.firstName || "" });
 }
-
-// ─── ARCHIVE INDEX (PUBLIC) ───────────────────────────────────────────────────
+__name(handleVerifySubscriber, "handleVerifySubscriber");
 async function handleArchiveIndex(request, env) {
-  const list = await env.CONTENT.list({ prefix: 'issue:' });
-
-  // Filter to only meta keys, sort newest first
-  const metaKeys = list.keys
-    .filter(k => k.name.endsWith(':meta'))
-    .sort((a, b) => b.name.localeCompare(a.name));
-
+  const list = await env.CONTENT.list({ prefix: "issue:" });
+  const metaKeys = list.keys.filter((k) => k.name.endsWith(":meta")).sort((a, b) => b.name.localeCompare(a.name));
   const issues = [];
   for (const key of metaKeys) {
     const val = await env.CONTENT.get(key.name);
     if (val) issues.push(JSON.parse(val));
   }
-
-  const typeLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-  const typeColor = { monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
-
-  const rows = issues.length === 0
-    ? `<p style="color:#7A8070;text-align:center;padding:3rem 0;font-family:'Figtree',sans-serif;">No issues published yet. Check back soon!</p>`
-    : issues.map(issue => {
-        const date = new Date(issue.generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        const label = typeLabel[issue.issueType] || 'ShieldSmart';
-        const color = typeColor[issue.issueType] || '#BCE600';
-        const id = encodeURIComponent(issue.id);
-        return `
+  const typeLabel = { monday: "Threat Radar", wednesday: "Safety Skill", friday: "Fix-It Help Desk" };
+  const typeColor = { monday: "#E8443A", wednesday: "#BCE600", friday: "#F5A623" };
+  const rows = issues.length === 0 ? `<p style="color:#7A8070;text-align:center;padding:3rem 0;font-family:'Figtree',sans-serif;">No issues published yet. Check back soon!</p>` : issues.map((issue) => {
+    const date = new Date(issue.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const label = typeLabel[issue.issueType] || "ShieldSmart";
+    const color = typeColor[issue.issueType] || "#BCE600";
+    const id = encodeURIComponent(issue.id);
+    return `
           <a href="/archive/${id}" class="issue-link">
             <div style="display:flex;align-items:center;gap:10px;">
               <span style="background:${color}18;border:1px solid ${color}44;color:${color};font-size:0.58rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:3px 10px;border-radius:100px;white-space:nowrap;flex-shrink:0;">${label}</span>
@@ -1241,8 +1070,7 @@ async function handleArchiveIndex(request, env) {
               <span style="color:#7A8070;font-size:0.75rem;white-space:nowrap;flex-shrink:0;">${date}</span>
             </div>
           </a>`;
-      }).join('');
-
+  }).join("");
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1306,27 +1134,23 @@ async function handleArchiveIndex(request, env) {
 </body>
 </html>`);
 }
-
-// ─── ARCHIVE READ SINGLE ISSUE (PUBLIC) ───────────────────────────────────────
+__name(handleArchiveIndex, "handleArchiveIndex");
 async function handleArchiveRead(issueId, env) {
   const decoded = decodeURIComponent(issueId);
   const issueHtml = await env.CONTENT.get(decoded);
   const issueBody = await env.CONTENT.get(`${decoded}:body`);
   const metaRaw = await env.CONTENT.get(`${decoded}:meta`);
   const meta = metaRaw ? JSON.parse(metaRaw) : {};
-
   if (!issueHtml) {
     return html(`<!DOCTYPE html><html><body style="background:#111311;color:#F2F5E8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;">
       <div><h2 style="font-size:2rem;margin-bottom:1rem;">Issue not found</h2>
       <a href="/archive" style="color:#BCE600;">Back to archive &rarr;</a></div>
     </body></html>`, 404);
   }
-
-  const subject = meta.subject || 'ShieldSmart Issue';
-  const typeLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-  const label = typeLabel[meta.issueType] || 'ShieldSmart';
-  const date = meta.generatedAt ? new Date(meta.generatedAt).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
-
+  const subject = meta.subject || "ShieldSmart Issue";
+  const typeLabel = { monday: "Threat Radar", wednesday: "Safety Skill", friday: "Fix-It Help Desk" };
+  const label = typeLabel[meta.issueType] || "ShieldSmart";
+  const date = meta.generatedAt ? new Date(meta.generatedAt).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) : "";
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1351,7 +1175,7 @@ async function handleArchiveRead(issueId, env) {
   /* Issue header */
   .issue-header{position:relative;z-index:1;max-width:960px;margin:0 auto;padding:5rem 1.5rem 2rem;}
 
-  /* Preview wrapper — shows top portion */
+  /* Preview wrapper \u2014 shows top portion */
   .preview-wrap{position:relative;z-index:1;max-width:960px;margin:0 auto;padding:0 1.5rem;}
   .preview-inner{max-height:420px;overflow:hidden;position:relative;}
   .preview-inner iframe{width:100%;border:none;border-radius:12px;display:block;}
@@ -1436,7 +1260,7 @@ async function handleArchiveRead(issueId, env) {
     <div id="popup-form">
       <div class="popup-icon">&#128737;</div>
       <h3>Want to Read More?</h3>
-      <p>Already subscribed? Enter your email to unlock instantly. New here? Subscribe free — it only takes a second.</p>
+      <p>Already subscribed? Enter your email to unlock instantly. New here? Subscribe free \u2014 it only takes a second.</p>
       <input type="email" id="popup-email" class="gate-input" placeholder="your@email.com" />
       <div id="popup-msg" style="font-size:0.75rem;color:#E8443A;margin-bottom:8px;display:none;"></div>
       <button class="gate-btn" onclick="popupAccess()">Unlock Full Issue &rarr;</button>
@@ -1498,7 +1322,7 @@ async function handleArchiveRead(issueId, env) {
       return { success: true, message: null };
     }
 
-    // Not subscribed — sign them up
+    // Not subscribed \u2014 sign them up
     await fetch(WORKER + '/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1569,19 +1393,18 @@ async function handleArchiveRead(issueId, env) {
     if (overlay) overlay.style.display = 'none';
     document.getElementById('issue-content').style.pointerEvents = 'auto';
   }
-</script>
+<\/script>
 </body>
 </html>`);
 }
-
-// ─── ADMIN PAGE ──────────────────────────────────────────────────────────────
+__name(handleArchiveRead, "handleArchiveRead");
 function handleAdminPage() {
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ShieldSmart Admin — Reader Question Generator</title>
+  <title>ShieldSmart Admin \u2014 Reader Question Generator</title>
   <link rel="icon" type="image/png" href="/logo.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1656,7 +1479,7 @@ function handleAdminPage() {
 
   <!-- Login -->
   <div class="login-box" id="loginBox">
-    <h2 style="margin-bottom:16px; font-size:18px;">🔐 Admin Login</h2>
+    <h2 style="margin-bottom:16px; font-size:18px;">\u{1F510} Admin Login</h2>
     <div class="field">
       <label for="secret">Admin Secret</label>
       <input type="password" id="secret" placeholder="Enter admin secret..." />
@@ -1670,15 +1493,15 @@ function handleAdminPage() {
     <div style="display:flex; gap:16px; margin-bottom:24px;">
       <div style="flex:1; background:#111311; border:1px solid #1E201E; border-radius:12px; padding:20px; text-align:center;">
         <div style="color:#7A8070; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Active Subscribers</div>
-        <div id="subCount" style="color:#BCE600; font-size:36px; font-weight:700;">—</div>
+        <div id="subCount" style="color:#BCE600; font-size:36px; font-weight:700;">\u2014</div>
       </div>
       <div style="flex:1; background:#111311; border:1px solid #1E201E; border-radius:12px; padding:20px; text-align:center;">
         <div style="color:#7A8070; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Total Subscribers</div>
-        <div id="subTotal" style="color:#F2F5E8; font-size:36px; font-weight:700;">—</div>
+        <div id="subTotal" style="color:#F2F5E8; font-size:36px; font-weight:700;">\u2014</div>
       </div>
     </div>
     <div class="gen-box">
-      <h2 style="margin-bottom:20px; font-size:18px;">📨 Generate Newsletter from Reader Question</h2>
+      <h2 style="margin-bottom:20px; font-size:18px;">\u{1F4E8} Generate Newsletter from Reader Question</h2>
       <div class="row">
         <div class="field">
           <label for="readerName">Reader's First Name (optional)</label>
@@ -1687,9 +1510,9 @@ function handleAdminPage() {
         <div class="field">
           <label for="issueType">Issue Type</label>
           <select id="issueType">
-            <option value="friday" selected>Friday — Fix-It Help Desk</option>
-            <option value="monday">Monday — Threat Radar</option>
-            <option value="wednesday">Wednesday — Safety Skill</option>
+            <option value="friday" selected>Friday \u2014 Fix-It Help Desk</option>
+            <option value="monday">Monday \u2014 Threat Radar</option>
+            <option value="wednesday">Wednesday \u2014 Safety Skill</option>
           </select>
         </div>
       </div>
@@ -1697,22 +1520,22 @@ function handleAdminPage() {
         <label for="question">Reader's Question (from help@xnltech.com)</label>
         <textarea id="question" placeholder="Paste the reader's question here... e.g. &quot;My phone battery dies by noon every day. How do I fix it?&quot;"></textarea>
       </div>
-      <button class="btn btn-lime" id="genBtn" onclick="doGenerate()">⚡ Generate Newsletter</button>
+      <button class="btn btn-lime" id="genBtn" onclick="doGenerate()">\u26A1 Generate Newsletter</button>
       <div class="status" id="genStatus"></div>
     </div>
 
     <!-- Preview area -->
     <div id="previewArea" class="hidden">
       <div class="gen-box">
-        <h2 style="margin-bottom:8px; font-size:18px;">👁️ Preview</h2>
+        <h2 style="margin-bottom:8px; font-size:18px;">\u{1F441}\uFE0F Preview</h2>
         <p style="color:#7A8070; font-size:14px; margin-bottom:12px;" id="previewSubject"></p>
         <iframe class="preview-frame" id="previewFrame" sandbox="allow-same-origin"></iframe>
         <div class="btn-group">
-          <button class="btn btn-lime" onclick="doGenerate()">🔄 Regenerate</button>
-          <button class="btn btn-amber" id="sendBtn" onclick="showSendConfirm()">📤 Send to All Subscribers</button>
+          <button class="btn btn-lime" onclick="doGenerate()">\u{1F504} Regenerate</button>
+          <button class="btn btn-amber" id="sendBtn" onclick="showSendConfirm()">\u{1F4E4} Send to All Subscribers</button>
         </div>
         <div class="send-confirm hidden" id="sendConfirm">
-          <p>⚠️ This will send this newsletter to <strong>all active subscribers</strong>. Are you sure?</p>
+          <p>\u26A0\uFE0F This will send this newsletter to <strong>all active subscribers</strong>. Are you sure?</p>
           <div class="btn-group">
             <button class="btn btn-red" id="confirmSendBtn" onclick="doSend()">Yes, Send It</button>
             <button class="btn btn-lime" onclick="hideSendConfirm()">Cancel</button>
@@ -1724,46 +1547,46 @@ function handleAdminPage() {
 
     <!-- Custom Newsletter Writer -->
     <div class="gen-box" style="margin-top:24px;">
-      <h2 style="margin-bottom:16px; font-size:18px;">✍️ Write Custom Newsletter</h2>
-      <p style="color:#7A8070; font-size:13px; margin-bottom:16px;">Add sections visually — styling matches the AI-generated newsletters automatically.</p>
+      <h2 style="margin-bottom:16px; font-size:18px;">\u270D\uFE0F Write Custom Newsletter</h2>
+      <p style="color:#7A8070; font-size:13px; margin-bottom:16px;">Add sections visually \u2014 styling matches the AI-generated newsletters automatically.</p>
       <div class="row">
         <div class="field">
           <label for="customSubject">Subject Line</label>
-          <input type="text" id="customSubject" placeholder="e.g. 🔐 Special Announcement from ShieldSmart" />
+          <input type="text" id="customSubject" placeholder="e.g. \u{1F510} Special Announcement from ShieldSmart" />
         </div>
         <div class="field">
           <label for="customType">Issue Type (for styling)</label>
           <select id="customType">
-            <option value="monday">Monday — Threat Radar</option>
-            <option value="wednesday">Wednesday — Safety Skill</option>
-            <option value="friday">Friday — Fix-It Help Desk</option>
+            <option value="monday">Monday \u2014 Threat Radar</option>
+            <option value="wednesday">Wednesday \u2014 Safety Skill</option>
+            <option value="friday">Friday \u2014 Fix-It Help Desk</option>
           </select>
         </div>
       </div>
 
       <!-- Intro paragraph (optional) -->
       <div class="field">
-        <label>Intro Paragraph <span style="color:#5A6050; font-weight:400;">(optional — shows before sections)</span></label>
-        <textarea id="customIntro" rows="3" placeholder="Hey ShieldSmart readers! This week we have something special…"></textarea>
+        <label>Intro Paragraph <span style="color:#5A6050; font-weight:400;">(optional \u2014 shows before sections)</span></label>
+        <textarea id="customIntro" rows="3" placeholder="Hey ShieldSmart readers! This week we have something special\u2026"></textarea>
       </div>
 
       <!-- Section builder -->
       <label style="margin-bottom:10px;">Sections</label>
       <div id="sectionList"></div>
-      <button class="btn btn-lime" style="margin-bottom:20px;" onclick="addSection()">＋ Add Section</button>
+      <button class="btn btn-lime" style="margin-bottom:20px;" onclick="addSection()">\uFF0B Add Section</button>
 
       <div class="btn-group">
-        <button class="btn btn-lime" id="customPreviewBtn" onclick="doCustomPreview()">👁️ Preview</button>
+        <button class="btn btn-lime" id="customPreviewBtn" onclick="doCustomPreview()">\u{1F441}\uFE0F Preview</button>
       </div>
       <div class="status" id="customStatus"></div>
       <div id="customPreviewArea" class="hidden" style="margin-top:20px;">
         <iframe class="preview-frame" id="customPreviewFrame" sandbox="allow-same-origin" style="height:600px;"></iframe>
         <div class="btn-group" style="margin-top:12px;">
-          <button class="btn btn-lime" onclick="doCustomPreview()">🔄 Refresh Preview</button>
-          <button class="btn btn-amber" onclick="showCustomSendConfirm()">📤 Send to All Subscribers</button>
+          <button class="btn btn-lime" onclick="doCustomPreview()">\u{1F504} Refresh Preview</button>
+          <button class="btn btn-amber" onclick="showCustomSendConfirm()">\u{1F4E4} Send to All Subscribers</button>
         </div>
         <div class="send-confirm hidden" id="customSendConfirm">
-          <p>⚠️ This will send this custom newsletter to <strong>all active subscribers</strong>. Are you sure?</p>
+          <p>\u26A0\uFE0F This will send this custom newsletter to <strong>all active subscribers</strong>. Are you sure?</p>
           <div class="btn-group">
             <button class="btn btn-red" id="customConfirmSendBtn" onclick="doCustomSend()">Yes, Send It</button>
             <button class="btn btn-lime" onclick="hideCustomSendConfirm()">Cancel</button>
@@ -1775,33 +1598,33 @@ function handleAdminPage() {
 
     <!-- Social Post Generator -->
     <div class="gen-box" style="margin-top:24px;">
-      <h2 style="margin-bottom:16px; font-size:18px;">📱 Social Media Post Generator</h2>
+      <h2 style="margin-bottom:16px; font-size:18px;">\u{1F4F1} Social Media Post Generator</h2>
       <p style="color:#7A8070; font-size:13px; margin-bottom:16px;">Generate ready-to-paste posts for Facebook and X to promote ShieldSmart and drive subscriptions.</p>
       <div class="field">
         <label for="socialTopic">Topic / Angle (optional)</label>
-        <input type="text" id="socialTopic" placeholder="e.g. &quot;phone scams targeting seniors&quot; — leave blank for AI to pick" />
+        <input type="text" id="socialTopic" placeholder="e.g. &quot;phone scams targeting seniors&quot; \u2014 leave blank for AI to pick" />
       </div>
-      <button class="btn btn-lime" id="socialBtn" onclick="doSocialGen()">📱 Generate Posts</button>
+      <button class="btn btn-lime" id="socialBtn" onclick="doSocialGen()">\u{1F4F1} Generate Posts</button>
       <div class="status" id="socialStatus"></div>
       <div id="socialResults" class="hidden" style="margin-top:20px;">
         <div style="margin-bottom:20px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <label style="margin:0; font-size:14px; color:#5599ff;">Facebook</label>
-            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('fbPost')">📋 Copy</button>
+            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('fbPost')">\u{1F4CB} Copy</button>
           </div>
           <div id="fbPost" style="background:#1E201E; border:1px solid #2a2d2a; border-radius:8px; padding:14px; color:#F2F5E8; font-size:14px; line-height:1.6; white-space:pre-wrap;"></div>
         </div>
         <div style="margin-bottom:20px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <label style="margin:0; font-size:14px; color:#F2F5E8;">𝕏 Post (Option 1)</label>
-            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('twPost')">📋 Copy</button>
+            <label style="margin:0; font-size:14px; color:#F2F5E8;">\u{1D54F} Post (Option 1)</label>
+            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('twPost')">\u{1F4CB} Copy</button>
           </div>
           <div id="twPost" style="background:#1E201E; border:1px solid #2a2d2a; border-radius:8px; padding:14px; color:#F2F5E8; font-size:14px; line-height:1.6; white-space:pre-wrap;"></div>
         </div>
         <div>
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <label style="margin:0; font-size:14px; color:#F2F5E8;">𝕏 Post (Option 2)</label>
-            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('twAltPost')">📋 Copy</button>
+            <label style="margin:0; font-size:14px; color:#F2F5E8;">\u{1D54F} Post (Option 2)</label>
+            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('twAltPost')">\u{1F4CB} Copy</button>
           </div>
           <div id="twAltPost" style="background:#1E201E; border:1px solid #2a2d2a; border-radius:8px; padding:14px; color:#F2F5E8; font-size:14px; line-height:1.6; white-space:pre-wrap;"></div>
         </div>
@@ -1811,7 +1634,7 @@ function handleAdminPage() {
     <!-- Manage Newsletters -->
     <div class="gen-box" style="margin-top:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="font-size:18px;">🗂️ Manage Newsletters</h2>
+        <h2 style="font-size:18px;">\u{1F5C2}\uFE0F Manage Newsletters</h2>
         <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadIssues()">Refresh</button>
       </div>
       <div id="issueList" style="color:#7A8070; font-size:14px;">Loading issues...</div>
@@ -1820,7 +1643,7 @@ function handleAdminPage() {
     <!-- Cron Log section -->
     <div class="gen-box" style="margin-top:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="font-size:18px;">⏰ Cron Job History</h2>
+        <h2 style="font-size:18px;">\u23F0 Cron Job History</h2>
         <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadCronLogs()">Refresh</button>
       </div>
       <div id="cronLogs" style="color:#7A8070; font-size:14px;">Click Refresh to load cron logs.</div>
@@ -1890,7 +1713,7 @@ function handleAdminPage() {
           + badge
           + '<span style="flex:1;color:#F2F5E8;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + subj + '</span>'
           + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + d + '</span>'
-          + '<button style="background:#2b1a1a;border:1px solid #e04040;color:#f88;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;" onclick="deleteIssue(&apos;' + issue.id.replace(/'/g, '') + '&apos;)">🗑️ Delete</button>'
+          + '<button style="background:#2b1a1a;border:1px solid #e04040;color:#f88;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;" onclick="deleteIssue(&apos;' + issue.id.replace(/'/g, '') + '&apos;)">\u{1F5D1}\uFE0F Delete</button>'
           + '</div>';
       }).join('');
     } catch (e) {
@@ -1932,9 +1755,9 @@ function handleAdminPage() {
         const d = new Date(l.firedAt).toLocaleString();
         const color = l.status === 'sent' ? '#BCE600' : l.status === 'error' ? '#f88' : '#F5A623';
         const badge = '<span style="display:inline-block;background:' + color + ';color:#111;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;">' + l.status.toUpperCase() + '</span>';
-        let detail = l.subject ? ' — ' + l.subject : '';
+        let detail = l.subject ? ' \u2014 ' + l.subject : '';
         if (l.sent !== undefined) detail += ' (' + l.sent + ' sent, ' + l.failed + ' failed)';
-        if (l.error) detail += ' — ' + l.error;
+        if (l.error) detail += ' \u2014 ' + l.error;
         return '<div style="padding:8px 0;border-bottom:1px solid #1E201E;">' + badge + ' <span style="color:#7A8070;margin:0 8px;">' + d + '</span> <strong style="color:#F2F5E8;">' + l.issueType + '</strong>' + detail + '</div>';
       }).join('');
     } catch (e) {
@@ -1949,7 +1772,7 @@ function handleAdminPage() {
     if (!question) { setStatus('genStatus', 'err', 'Please enter a reader question.'); return; }
 
     $('genBtn').disabled = true;
-    $('genBtn').textContent = '⏳ Generating...';
+    $('genBtn').textContent = '\u23F3 Generating...';
     setStatus('genStatus', 'info', 'Calling AI to generate newsletter... this may take 30-60 seconds.');
     $('previewArea').classList.add('hidden');
     $('sendConfirm').classList.add('hidden');
@@ -1964,7 +1787,7 @@ function handleAdminPage() {
       if (!res.ok) throw new Error(data.error || 'Generation failed');
 
       lastGenerated = data;
-      $('previewSubject').textContent = '📋 Subject: ' + data.subject;
+      $('previewSubject').textContent = '\u{1F4CB} Subject: ' + data.subject;
       const frame = $('previewFrame');
       frame.srcdoc = data.html;
       frame.style.height = '600px';
@@ -1974,14 +1797,14 @@ function handleAdminPage() {
       setStatus('genStatus', 'err', 'Error: ' + e.message);
     } finally {
       $('genBtn').disabled = false;
-      $('genBtn').textContent = '⚡ Generate Newsletter';
+      $('genBtn').textContent = '\u26A1 Generate Newsletter';
     }
   }
 
   async function doSocialGen() {
     const topic = $('socialTopic').value.trim();
     $('socialBtn').disabled = true;
-    $('socialBtn').textContent = '⏳ Generating...';
+    $('socialBtn').textContent = '\u23F3 Generating...';
     setStatus('socialStatus', 'info', 'Generating social posts... ~15 seconds.');
     $('socialResults').classList.add('hidden');
 
@@ -2003,7 +1826,7 @@ function handleAdminPage() {
       setStatus('socialStatus', 'err', 'Error: ' + e.message);
     } finally {
       $('socialBtn').disabled = false;
-      $('socialBtn').textContent = '📱 Generate Posts';
+      $('socialBtn').textContent = '\u{1F4F1} Generate Posts';
     }
   }
 
@@ -2012,7 +1835,7 @@ function handleAdminPage() {
     navigator.clipboard.writeText(text).then(() => {
       const btn = $(id).parentElement.querySelector('.btn');
       const orig = btn.textContent;
-      btn.textContent = '✅ Copied!';
+      btn.textContent = '\u2705 Copied!';
       setTimeout(() => btn.textContent = orig, 1500);
     });
   }
@@ -2033,26 +1856,26 @@ function handleAdminPage() {
       + '<span class="sec-num">' + id + '</span>'
       + '<input type="text" class="sec-title" placeholder="Section heading (e.g. What Happened, Why It Matters, What To Do)" value="' + (title || '').replace(/"/g, '&quot;') + '" />'
       + '<div class="sec-actions">'
-      + '<button title="Move up" onclick="moveSection(this,-1)">▲</button>'
-      + '<button title="Move down" onclick="moveSection(this,1)">▼</button>'
-      + '<button title="Remove" onclick="removeSection(this)">✕</button>'
+      + '<button title="Move up" onclick="moveSection(this,-1)">\u25B2</button>'
+      + '<button title="Move down" onclick="moveSection(this,1)">\u25BC</button>'
+      + '<button title="Remove" onclick="removeSection(this)">\u2715</button>'
       + '</div></div>'
       + '<div class="sec-style-row">'
       + '<span class="sec-style-opt' + ((!style || style === 'default') ? ' active' : '') + '" onclick="pickStyle(this,&apos;default&apos;)">Default</span>'
-      + '<span class="sec-style-opt' + ((style === 'callout') ? ' active' : '') + '" onclick="pickStyle(this,&apos;callout&apos;)">⚡ Callout</span>'
-      + '<span class="sec-style-opt' + ((style === 'warning') ? ' active' : '') + '" onclick="pickStyle(this,&apos;warning&apos;)">⚠️ Warning</span>'
-      + '<span class="sec-style-opt' + ((style === 'tip') ? ' active' : '') + '" onclick="pickStyle(this,&apos;tip&apos;)">💡 Tip</span>'
-      + '<span class="sec-style-opt' + ((style === 'steps') ? ' active' : '') + '" onclick="pickStyle(this,&apos;steps&apos;)">📋 Steps</span>'
+      + '<span class="sec-style-opt' + ((style === 'callout') ? ' active' : '') + '" onclick="pickStyle(this,&apos;callout&apos;)">\u26A1 Callout</span>'
+      + '<span class="sec-style-opt' + ((style === 'warning') ? ' active' : '') + '" onclick="pickStyle(this,&apos;warning&apos;)">\u26A0\uFE0F Warning</span>'
+      + '<span class="sec-style-opt' + ((style === 'tip') ? ' active' : '') + '" onclick="pickStyle(this,&apos;tip&apos;)">\u{1F4A1} Tip</span>'
+      + '<span class="sec-style-opt' + ((style === 'steps') ? ' active' : '') + '" onclick="pickStyle(this,&apos;steps&apos;)">\u{1F4CB} Steps</span>'
       + '</div>'
       + '<div class="sec-body">'
       + '<div class="sec-toolbar">'
       + '<button onclick="fmt(this,&apos;bold&apos;)"><b>B</b></button>'
       + '<button onclick="fmt(this,&apos;italic&apos;)"><i>I</i></button>'
-      + '<button onclick="fmt(this,&apos;insertUnorderedList&apos;)">• List</button>'
+      + '<button onclick="fmt(this,&apos;insertUnorderedList&apos;)">\u2022 List</button>'
       + '<button onclick="fmt(this,&apos;insertOrderedList&apos;)">1. List</button>'
-      + '<button onclick="fmtLink(this)">🔗 Link</button>'
+      + '<button onclick="fmtLink(this)">\u{1F517} Link</button>'
       + '</div>'
-      + '<div class="sec-editor" contenteditable="true" data-placeholder="Write your content here…">' + (content || '') + '</div>'
+      + '<div class="sec-editor" contenteditable="true" data-placeholder="Write your content here\u2026">' + (content || '') + '</div>'
       + '</div>';
     $('sectionList').appendChild(div);
     renumberSections();
@@ -2114,16 +1937,16 @@ function handleAdminPage() {
     var bg, border, headerColor, icon;
     switch (style) {
       case 'callout':
-        bg = '#1A2600'; border = '#4A6600'; headerColor = '#BCE600'; icon = '⚡';
+        bg = '#1A2600'; border = '#4A6600'; headerColor = '#BCE600'; icon = '\u26A1';
         break;
       case 'warning':
-        bg = '#2B1A00'; border = '#8B5E00'; headerColor = '#F5A623'; icon = '⚠️';
+        bg = '#2B1A00'; border = '#8B5E00'; headerColor = '#F5A623'; icon = '\u26A0\uFE0F';
         break;
       case 'tip':
-        bg = '#0D1A2B'; border = '#1A4070'; headerColor = '#5599FF'; icon = '💡';
+        bg = '#0D1A2B'; border = '#1A4070'; headerColor = '#5599FF'; icon = '\u{1F4A1}';
         break;
       case 'steps':
-        bg = '#1A1E1A'; border = '#3A3D3A'; headerColor = '#BCE600'; icon = '📋';
+        bg = '#1A1E1A'; border = '#3A3D3A'; headerColor = '#BCE600'; icon = '\u{1F4CB}';
         break;
       default:
         bg = '#1E201E'; border = '#2A2C2A'; headerColor = '#BCE600'; icon = '';
@@ -2169,7 +1992,7 @@ function handleAdminPage() {
     if (!subject || !rawHtml) { setStatus('customStatus', 'err', 'Subject and at least one section with content are required.'); return; }
 
     $('customPreviewBtn').disabled = true;
-    $('customPreviewBtn').textContent = '⏳ Wrapping...';
+    $('customPreviewBtn').textContent = '\u23F3 Wrapping...';
     setStatus('customStatus', 'info', 'Wrapping in email template...');
 
     try {
@@ -2189,7 +2012,7 @@ function handleAdminPage() {
       setStatus('customStatus', 'err', 'Error: ' + e.message);
     } finally {
       $('customPreviewBtn').disabled = false;
-      $('customPreviewBtn').textContent = '👁️ Preview';
+      $('customPreviewBtn').textContent = '\u{1F441}\uFE0F Preview';
     }
   }
 
@@ -2199,7 +2022,7 @@ function handleAdminPage() {
   async function doCustomSend() {
     if (!lastCustom) return;
     $('customConfirmSendBtn').disabled = true;
-    $('customConfirmSendBtn').textContent = '⏳ Sending...';
+    $('customConfirmSendBtn').textContent = '\u23F3 Sending...';
     setStatus('customSendStatus', 'info', 'Sending to all subscribers...');
 
     try {
@@ -2230,7 +2053,7 @@ function handleAdminPage() {
   async function doSend() {
     if (!lastGenerated) return;
     $('confirmSendBtn').disabled = true;
-    $('confirmSendBtn').textContent = '⏳ Sending...';
+    $('confirmSendBtn').textContent = '\u23F3 Sending...';
     setStatus('sendStatus', 'info', 'Sending to all subscribers...');
 
     try {
@@ -2256,12 +2079,11 @@ function handleAdminPage() {
       $('confirmSendBtn').textContent = 'Yes, Send It';
     }
   }
-</script>
+<\/script>
 </body>
 </html>`);
 }
-
-// ─── LANDING PAGE ────────────────────────────────────────────────────────────
+__name(handleAdminPage, "handleAdminPage");
 function handleLandingPage() {
   return html(`<!DOCTYPE html>
 <html lang="en">
@@ -2308,7 +2130,7 @@ function handleLandingPage() {
       overflow-x: hidden;
     }
 
-    /* ─── TOPBAR ─── */
+    /* \u2500\u2500\u2500 TOPBAR \u2500\u2500\u2500 */
     .topbar {
       position: fixed;
       top: 0; left: 0; right: 0;
@@ -2357,7 +2179,7 @@ function handleLandingPage() {
     .topbar-right { font-size: 0.8rem; color: var(--muted); }
     .topbar-right a { color: var(--lime); text-decoration: none; font-weight: 600; }
 
-    /* ─── SPLIT ─── */
+    /* \u2500\u2500\u2500 SPLIT \u2500\u2500\u2500 */
     .split {
       display: flex;
       min-height: 100vh;
@@ -2367,7 +2189,7 @@ function handleLandingPage() {
       width: 100%;
     }
 
-    /* ─── LEFT ─── */
+    /* \u2500\u2500\u2500 LEFT \u2500\u2500\u2500 */
     .left {
       flex: 1.15;
       background: var(--panel-l);
@@ -2535,7 +2357,7 @@ function handleLandingPage() {
 
     .partner-chip .dot { width: 6px; height: 6px; border-radius: 50%; }
 
-    /* ─── RIGHT ─── */
+    /* \u2500\u2500\u2500 RIGHT \u2500\u2500\u2500 */
     .right {
       flex: 0.85;
       background: var(--panel-r);
@@ -3127,29 +2949,32 @@ function handleLandingPage() {
     ], { duration: 380, easing: 'ease' });
     setTimeout(() => { f.style.borderColor = ''; }, 1400);
   }
-</script>
+<\/script>
 </body>
 </html>
 `);
 }
-
-// ─── LOGO HANDLER ─────────────────────────────────────────────────────────────
+__name(handleLandingPage, "handleLandingPage");
 async function handleLogo(env) {
-  const cached = await env.CONTENT.get('asset:logo.png', 'arrayBuffer');
+  const cached = await env.CONTENT.get("asset:logo.png", "arrayBuffer");
   if (!cached) {
-    return new Response('Logo not found', { status: 404 });
+    return new Response("Logo not found", { status: 404 });
   }
   return new Response(cached, {
     headers: {
-      'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      ...CORS,
-    },
+      "Content-Type": "image/png",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      ...CORS
+    }
   });
 }
-
-// ─── ADMIN AUTH ───────────────────────────────────────────────────────────────
+__name(handleLogo, "handleLogo");
 function isAdmin(request, env) {
-  const secret = request.headers.get('X-Admin-Secret');
+  const secret = request.headers.get("X-Admin-Secret");
   return secret && secret === env.ADMIN_SECRET;
 }
+__name(isAdmin, "isAdmin");
+export {
+  worker_default as default
+};
+//# sourceMappingURL=worker.js.map
