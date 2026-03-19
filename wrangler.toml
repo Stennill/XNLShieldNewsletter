@@ -1,0 +1,31 @@
+name = "shieldsmart-newsletter"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ─── CUSTOM DOMAIN ──────────────────────────────────────────────────────────
+# This routes xnltech.com to this Worker instead of Cloudflare Pages
+routes = [
+  { pattern = "xnltech.com/*", zone_name = "xnltech.com" },
+  { pattern = "www.xnltech.com/*", zone_name = "xnltech.com" }
+]
+
+# ─── CRON SCHEDULE ──────────────────────────────────────────────────────────
+# Fires at 11:00 AM UTC (7:00 AM EDT) on Monday, Wednesday, Friday
+[triggers]
+crons = ["0 11 * * 1", "0 11 * * 3", "0 11 * * 5"]
+
+# ─── KV NAMESPACES ──────────────────────────────────────────────────────────
+[[kv_namespaces]]
+binding = "SUBSCRIBERS"
+id = "b0a47d7e5738472ba0a55770977d4d34"
+
+[[kv_namespaces]]
+binding = "CONTENT"
+id = "fa3ad0e4834a4f6fbc11a3960c264eef"
+
+# ─── SECRETS (set via CLI, not in this file) ─────────────────────────────────
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put ADMIN_SECRET
+#   npx wrangler secret put SEND_API_KEY
+#   npx wrangler secret put SEND_FROM
