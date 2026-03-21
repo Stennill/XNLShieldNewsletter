@@ -127,6 +127,10 @@ export default {
       return handleAdminDeleteIssue(request, env);
     }
 
+    if (url.pathname === '/admin/growth-data' && request.method === 'POST') {
+      return handleAdminGrowthData(request, env);
+    }
+
     if (url.pathname === '/admin/drafts' && request.method === 'POST') {
       return handleAdminDrafts(request, env);
     }
@@ -634,6 +638,21 @@ async function handleAdminDeleteIssue(request, env) {
 }
 
 // ─── ADMIN DRAFT HANDLERS ─────────────────────────────────────────────────────
+async function handleAdminGrowthData(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  const days = body.days || 30;
+  const snapshots = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000).toISOString().split('T')[0];
+    try {
+      const raw = await env.CONTENT.get(`growth:${d}`);
+      if (raw) snapshots.push(JSON.parse(raw));
+    } catch (_) {}
+  }
+  return json({ snapshots });
+}
+
 async function handleAdminDrafts(request, env) {
   const body = await request.json();
   if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
@@ -1984,922 +2003,1240 @@ function handleAdminPage() {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ShieldSmart Admin — Reader Question Generator</title>
+  <title>ShieldSmart Admin</title>
   <link rel="icon" type="image/png" href="/logo.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0D0F0D; color: #F2F5E8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-height: 100vh; }
-    .wrap { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
-    .logo-row { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
-    .logo-row img { width: 38px; height: 38px; }
-    .logo-row h1 { font-size: 24px; font-weight: 700; }
-    .logo-row h1 span.s { color: #fff; } .logo-row h1 span.m { color: #BCE600; }
-    .badge { display: inline-block; background: #F5A623; color: #111311; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 4px; margin-left: 10px; vertical-align: middle; }
+    body { background: #0D0F0D; color: #F2F5E8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-height: 100vh; display: flex; }
 
-    /* Login */
-    .login-box, .gen-box { background: #111311; border: 1px solid #1E201E; border-radius: 12px; padding: 32px; margin-bottom: 24px; }
+    /* ── Sidebar ─────────────────── */
+    .sidebar { width: 230px; min-height: 100vh; background: #111311; border-right: 1px solid #1E201E; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; z-index: 100; }
+    .sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 22px 20px 18px; border-bottom: 1px solid #1E201E; }
+    .sidebar-logo img { width: 32px; height: 32px; }
+    .sidebar-logo h1 { font-size: 18px; font-weight: 700; }
+    .sidebar-logo .s { color: #fff; } .sidebar-logo .m { color: #BCE600; }
+    .sidebar-badge { display: inline-block; background: #F5A623; color: #111; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+    .sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 11px 20px; color: #7A8070; font-size: 14px; font-weight: 500; cursor: pointer; transition: .15s; border-left: 3px solid transparent; }
+    .nav-item:hover { color: #F2F5E8; background: rgba(188,230,0,0.04); }
+    .nav-item.active { color: #BCE600; background: rgba(188,230,0,0.06); border-left-color: #BCE600; }
+    .nav-item .nav-icon { width: 20px; text-align: center; font-size: 15px; }
+    .nav-item .nav-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #F5A623; display: none; }
+    .nav-item .nav-dot.show { display: block; }
+    .sidebar-footer { padding: 14px 20px; border-top: 1px solid #1E201E; color: #5A6050; font-size: 11px; }
+
+    /* ── Main ─────────────────────── */
+    .main { margin-left: 230px; flex: 1; min-height: 100vh; }
+    .main-header { padding: 20px 32px; border-bottom: 1px solid #1E201E; display: flex; align-items: center; justify-content: space-between; background: #111311; position: sticky; top: 0; z-index: 50; }
+    .main-header h2 { font-size: 20px; font-weight: 700; }
+    .main-content { padding: 28px 32px; max-width: 1400px; }
+
+    /* ── Login ────────────────────── */
+    .login-overlay { position: fixed; inset: 0; background: #0D0F0D; z-index: 200; display: flex; align-items: center; justify-content: center; }
+    .login-card { background: #111311; border: 1px solid #1E201E; border-radius: 16px; padding: 40px; width: 400px; max-width: 90vw; text-align: center; }
+    .login-card img { width: 48px; height: 48px; margin-bottom: 16px; }
+    .login-card h2 { font-size: 22px; margin-bottom: 6px; }
+    .login-card p { color: #7A8070; font-size: 14px; margin-bottom: 24px; }
+
+    /* ── Cards & Panels ──────────── */
+    .card { background: #111311; border: 1px solid #1E201E; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .card-header h3 { font-size: 16px; font-weight: 600; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: #111311; border: 1px solid #1E201E; border-radius: 12px; padding: 20px; text-align: center; transition: .2s; }
+    .stat-card:hover { border-color: #2a2d2a; }
+    .stat-label { color: #7A8070; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px; }
+    .stat-value { font-size: 32px; font-weight: 700; color: #BCE600; }
+    .stat-value.white { color: #F2F5E8; }
+    .stat-value.amber { color: #F5A623; }
+    .stat-value.red { color: #E8443A; }
+    .stat-sub { color: #5A6050; font-size: 12px; margin-top: 4px; }
+
+    /* ── Draft cards ─────────────── */
+    .draft-card { background: #161816; border: 1px solid #1E201E; border-radius: 10px; padding: 18px; margin-bottom: 12px; transition: .15s; }
+    .draft-card:hover { border-color: #2a2d2a; }
+    .draft-card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .draft-card-subject { flex: 1; color: #F2F5E8; font-size: 15px; font-weight: 500; min-width: 200px; }
+    .draft-card-meta { color: #7A8070; font-size: 12px; white-space: nowrap; }
+    .draft-card-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .draft-card.needs-action { border-color: #F5A623; border-width: 2px; background: #1a1810; }
+    .badge-sm { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+
+    /* ── Graph ────────────────────── */
+    .graph-wrap { background: #111311; border: 1px solid #1E201E; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .graph-wrap h3 { font-size: 14px; color: #7A8070; margin-bottom: 14px; text-transform: uppercase; letter-spacing: 1px; }
+    .graph-canvas { width: 100%; height: 220px; display: block; }
+
+    /* ── Forms ────────────────────── */
     label { display: block; color: #7A8070; font-size: 13px; margin-bottom: 6px; }
-    input, textarea, select { width: 100%; background: #1E201E; border: 1px solid #2a2d2a; border-radius: 8px; color: #F2F5E8; padding: 12px 14px; font-size: 15px; font-family: inherit; }
+    input, textarea, select { width: 100%; background: #1E201E; border: 1px solid #2a2d2a; border-radius: 8px; color: #F2F5E8; padding: 11px 14px; font-size: 14px; font-family: inherit; }
     input:focus, textarea:focus, select:focus { outline: none; border-color: #BCE600; }
     textarea { min-height: 120px; resize: vertical; }
     .row { display: flex; gap: 16px; margin-bottom: 16px; }
     .row > * { flex: 1; }
     .field { margin-bottom: 16px; }
 
-    .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 28px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: .15s; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 22px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: .15s; white-space: nowrap; }
+    .btn-sm { padding: 7px 14px; font-size: 12px; border-radius: 6px; }
     .btn-lime { background: #BCE600; color: #111311; }
     .btn-lime:hover { background: #d4ff1a; }
     .btn-amber { background: #F5A623; color: #111311; }
     .btn-amber:hover { background: #ffb940; }
     .btn-red { background: #e04040; color: #fff; }
     .btn-red:hover { background: #ff5555; }
+    .btn-ghost { background: transparent; border: 1px solid #2a2d2a; color: #7A8070; }
+    .btn-ghost:hover { border-color: #BCE600; color: #BCE600; }
     .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn-group { display: flex; gap: 12px; margin-top: 20px; }
+    .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
 
-    .status { margin-top: 16px; padding: 14px 18px; border-radius: 8px; font-size: 14px; display: none; }
+    .status { margin-top: 14px; padding: 12px 16px; border-radius: 8px; font-size: 13px; display: none; }
     .status.ok { display: block; background: #1a2b1a; border: 1px solid #BCE600; color: #BCE600; }
     .status.err { display: block; background: #2b1a1a; border: 1px solid #e04040; color: #f88; }
     .status.info { display: block; background: #1a1f2b; border: 1px solid #5599ff; color: #88bbff; }
 
-    .preview-frame { width: 100%; border: 1px solid #2a2d2a; border-radius: 8px; margin-top: 20px; background: #111311; min-height: 400px; }
-    .hidden { display: none; }
+    .preview-frame { width: 100%; border: 1px solid #2a2d2a; border-radius: 8px; background: #111311; min-height: 400px; }
+    .hidden { display: none !important; }
 
-    .send-confirm { background: #1E201E; border: 1px solid #F5A623; border-radius: 12px; padding: 24px; margin-top: 20px; }
-    .send-confirm p { margin-bottom: 16px; color: #F2F5E8; }
+    .send-confirm { background: #1E201E; border: 1px solid #F5A623; border-radius: 10px; padding: 20px; margin-top: 16px; }
+    .send-confirm p { margin-bottom: 12px; color: #F2F5E8; font-size: 14px; }
     .send-confirm strong { color: #F5A623; }
 
-    /* Section editor */
-    .sec-card { background: #1a1c1a; border: 1px solid #2a2d2a; border-radius: 10px; padding: 18px; margin-bottom: 14px; position: relative; }
+    /* ── Sections ─────────────────── */
+    .tab-view { display: none; }
+    .tab-view.active { display: block; }
+    .empty-state { text-align: center; padding: 48px 20px; color: #5A6050; }
+    .empty-state .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+    .empty-state p { font-size: 14px; }
+    .divider { border: none; border-top: 1px solid #1E201E; margin: 20px 0; }
+
+    /* ── Section editor (custom writer) ── */
+    .sec-card { background: #1a1c1a; border: 1px solid #2a2d2a; border-radius: 10px; padding: 18px; margin-bottom: 14px; }
     .sec-card:hover { border-color: #3a3d3a; }
     .sec-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-    .sec-header .sec-num { background: #BCE600; color: #111311; font-weight: 700; font-size: 12px; min-width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
-    .sec-header input { flex: 1; font-size: 15px; font-weight: 600; }
+    .sec-header .sec-num { background: #BCE600; color: #111; font-weight: 700; font-size: 12px; min-width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
+    .sec-header input { flex: 1; font-size: 14px; font-weight: 600; }
     .sec-actions { display: flex; gap: 6px; }
-    .sec-actions button { background: #222522; border: 1px solid #2a2d2a; color: #7A8070; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: .15s; padding: 0; }
+    .sec-actions button { background: #222522; border: 1px solid #2a2d2a; color: #7A8070; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; transition: .15s; padding: 0; }
     .sec-actions button:hover { border-color: #BCE600; color: #BCE600; }
-    .sec-style-row { display: flex; gap: 8px; margin-bottom: 10px; }
-    .sec-style-opt { padding: 5px 12px; border: 1px solid #2a2d2a; border-radius: 6px; background: #222522; color: #7A8070; cursor: pointer; font-size: 12px; font-weight: 600; transition: .15s; }
+    .sec-style-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .sec-style-opt { padding: 4px 10px; border: 1px solid #2a2d2a; border-radius: 6px; background: #222522; color: #7A8070; cursor: pointer; font-size: 11px; font-weight: 600; transition: .15s; }
     .sec-style-opt:hover { border-color: rgba(188,230,0,0.3); }
     .sec-style-opt.active { border-color: #BCE600; color: #BCE600; background: rgba(188,230,0,0.08); }
     .sec-body { min-height: 90px; }
     .sec-toolbar { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
-    .sec-toolbar button { background: #222522; border: 1px solid #2a2d2a; color: #F2F5E8; padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: 600; transition: .15s; }
+    .sec-toolbar button { background: #222522; border: 1px solid #2a2d2a; color: #F2F5E8; padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600; transition: .15s; }
     .sec-toolbar button:hover { border-color: #BCE600; color: #BCE600; }
-    .sec-editor { background: #1E201E; border: 1px solid #2a2d2a; border-radius: 8px; padding: 14px; color: #F2F5E8; font-size: 15px; line-height: 1.7; min-height: 90px; outline: none; }
+    .sec-editor { background: #1E201E; border: 1px solid #2a2d2a; border-radius: 8px; padding: 14px; color: #F2F5E8; font-size: 14px; line-height: 1.7; min-height: 90px; outline: none; }
     .sec-editor:focus { border-color: #BCE600; }
     .sec-editor ul, .sec-editor ol { margin-left: 20px; }
+
+    /* ── QA report ────────────────── */
+    .qa-box { border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .qa-pass { background: #1a2b1a; border: 1px solid #BCE600; }
+    .qa-fail { background: #2b1a1a; border: 1px solid #E8443A; }
+
+    /* ── Responsive ───────────────── */
+    @media (max-width: 900px) {
+      .sidebar { width: 60px; }
+      .sidebar-logo h1, .sidebar-badge, .nav-item span:not(.nav-icon):not(.nav-dot), .sidebar-footer { display: none; }
+      .sidebar-logo { padding: 16px 14px; justify-content: center; }
+      .nav-item { padding: 12px 0; justify-content: center; }
+      .main { margin-left: 60px; }
+      .main-content { padding: 20px 16px; }
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    }
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="logo-row">
+
+<!-- ═══ LOGIN OVERLAY ═══ -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-card">
     <img src="/logo.png" alt="ShieldSmart" />
-    <h1><span class="s">SHIELD</span><span class="m">SMART</span> <span class="badge">ADMIN</span></h1>
-  </div>
-
-  <!-- Login -->
-  <div class="login-box" id="loginBox">
-    <h2 style="margin-bottom:16px; font-size:18px;">🔐 Admin Login</h2>
+    <h2><span style="color:#fff">SHIELD</span><span style="color:#BCE600">SMART</span></h2>
+    <p>Admin Dashboard</p>
     <div class="field">
-      <label for="secret">Admin Secret</label>
-      <input type="password" id="secret" placeholder="Enter admin secret..." />
+      <input type="password" id="secret" placeholder="Enter admin secret..." style="text-align:center;" />
     </div>
-    <button class="btn btn-lime" onclick="doLogin()">Unlock</button>
+    <button class="btn btn-lime" style="width:100%;justify-content:center;margin-top:8px;" onclick="doLogin()">Unlock Dashboard</button>
     <div class="status" id="loginStatus"></div>
-  </div>
-
-  <!-- Main panel (hidden until login) -->
-  <div id="mainPanel" class="hidden">
-    <div style="display:flex; gap:16px; margin-bottom:24px;">
-      <div style="flex:1; background:#111311; border:1px solid #1E201E; border-radius:12px; padding:20px; text-align:center;">
-        <div style="color:#7A8070; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Active Subscribers</div>
-        <div id="subCount" style="color:#BCE600; font-size:36px; font-weight:700;">—</div>
-      </div>
-      <div style="flex:1; background:#111311; border:1px solid #1E201E; border-radius:12px; padding:20px; text-align:center;">
-        <div style="color:#7A8070; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Total Subscribers</div>
-        <div id="subTotal" style="color:#F2F5E8; font-size:36px; font-weight:700;">—</div>
-      </div>
-    </div>
-    <!-- Draft Queue -->
-    <div class="gen-box" id="draftSection">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="font-size:18px;">📋 Draft Queue</h2>
-        <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadDrafts()">Refresh</button>
-      </div>
-      <div id="draftList" style="color:#7A8070; font-size:14px;">Loading drafts...</div>
-    </div>
-
-    <!-- Draft Preview/Edit Modal -->
-    <div id="draftPreviewArea" class="hidden">
-      <div class="gen-box">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-          <h2 style="font-size:18px;">📝 Draft Editor</h2>
-          <button class="btn" style="background:#222;color:#7A8070;padding:6px 14px;font-size:13px;" onclick="closeDraftPreview()">✕ Close</button>
-        </div>
-        <div id="draftQAReport" class="hidden" style="margin-bottom:16px;"></div>
-        <div class="field" style="margin-bottom:12px;">
-          <label for="draftSubjectEdit">Subject Line</label>
-          <input type="text" id="draftSubjectEdit" />
-        </div>
-        <iframe class="preview-frame" id="draftPreviewFrame" sandbox="allow-same-origin" style="height:500px;"></iframe>
-        <div class="field" style="margin-top:12px;">
-          <label for="draftHtmlEdit">HTML Content <span style="color:#5A6050;font-weight:400;">(advanced — edit with care)</span></label>
-          <textarea id="draftHtmlEdit" style="min-height:200px; font-family:monospace; font-size:12px;"></textarea>
-        </div>
-        <div class="btn-group" style="flex-wrap:wrap;">
-          <button class="btn btn-lime" onclick="saveDraftEdits()">💾 Save Edits</button>
-          <button class="btn btn-lime" onclick="refreshDraftPreview()">👁️ Refresh Preview</button>
-          <button class="btn btn-lime" onclick="regenerateDraft()">🔄 Regenerate</button>
-          <button class="btn btn-amber" onclick="approveDraft()">📤 Approve &amp; Send</button>
-          <button class="btn btn-red" onclick="discardDraft()">🗑️ Discard</button>
-        </div>
-        <div class="status" id="draftEditStatus"></div>
-      </div>
-    </div>
-
-    <div class="gen-box">
-      <h2 style="margin-bottom:20px; font-size:18px;">📨 Generate Newsletter from Reader Question</h2>
-      <div class="row">
-        <div class="field">
-          <label for="readerName">Reader's First Name (optional)</label>
-          <input type="text" id="readerName" placeholder="e.g. Sarah" />
-        </div>
-        <div class="field">
-          <label for="issueType">Issue Type</label>
-          <select id="issueType">
-            <option value="fix-it" selected>Friday — Fix-It Help Desk</option>
-            <option value="threat-radar">Monday — Threat Radar</option>
-            <option value="scam-spotlight">Tuesday — Scam Spotlight</option>
-            <option value="safety-skill">Wednesday — Safety Skill</option>
-            <option value="news-brief">Thursday — News Brief</option>
-          </select>
-        </div>
-      </div>
-      <div class="field">
-        <label for="question">Reader's Question (from help@xnltech.com)</label>
-        <textarea id="question" placeholder="Paste the reader's question here... e.g. &quot;My phone battery dies by noon every day. How do I fix it?&quot;"></textarea>
-      </div>
-      <button class="btn btn-lime" id="genBtn" onclick="doGenerate()">⚡ Generate Newsletter</button>
-      <div class="status" id="genStatus"></div>
-    </div>
-
-    <!-- Preview area -->
-    <div id="previewArea" class="hidden">
-      <div class="gen-box">
-        <h2 style="margin-bottom:8px; font-size:18px;">👁️ Preview</h2>
-        <p style="color:#7A8070; font-size:14px; margin-bottom:12px;" id="previewSubject"></p>
-        <iframe class="preview-frame" id="previewFrame" sandbox="allow-same-origin"></iframe>
-        <div class="btn-group">
-          <button class="btn btn-lime" onclick="doGenerate()">🔄 Regenerate</button>
-          <button class="btn btn-amber" id="sendBtn" onclick="showSendConfirm()">📤 Send to All Subscribers</button>
-        </div>
-        <div class="send-confirm hidden" id="sendConfirm">
-          <p>⚠️ This will send this newsletter to <strong>all active subscribers</strong>. Are you sure?</p>
-          <div class="btn-group">
-            <button class="btn btn-red" id="confirmSendBtn" onclick="doSend()">Yes, Send It</button>
-            <button class="btn btn-lime" onclick="hideSendConfirm()">Cancel</button>
-          </div>
-        </div>
-        <div class="status" id="sendStatus"></div>
-      </div>
-    </div>
-
-    <!-- Custom Newsletter Writer -->
-    <div class="gen-box" style="margin-top:24px;">
-      <h2 style="margin-bottom:16px; font-size:18px;">✍️ Write Custom Newsletter</h2>
-      <p style="color:#7A8070; font-size:13px; margin-bottom:16px;">Add sections visually — styling matches the AI-generated newsletters automatically.</p>
-      <div class="row">
-        <div class="field">
-          <label for="customSubject">Subject Line</label>
-          <input type="text" id="customSubject" placeholder="e.g. 🔐 Special Announcement from ShieldSmart" />
-        </div>
-        <div class="field">
-          <label for="customType">Issue Type (for styling)</label>
-          <select id="customType">
-            <option value="threat-radar">Monday — Threat Radar</option>
-            <option value="scam-spotlight">Tuesday — Scam Spotlight</option>
-            <option value="safety-skill">Wednesday — Safety Skill</option>
-            <option value="news-brief">Thursday — News Brief</option>
-            <option value="fix-it">Friday — Fix-It Help Desk</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Intro paragraph (optional) -->
-      <div class="field">
-        <label>Intro Paragraph <span style="color:#5A6050; font-weight:400;">(optional — shows before sections)</span></label>
-        <textarea id="customIntro" rows="3" placeholder="Hey ShieldSmart readers! This week we have something special…"></textarea>
-      </div>
-
-      <!-- Section builder -->
-      <label style="margin-bottom:10px;">Sections</label>
-      <div id="sectionList"></div>
-      <button class="btn btn-lime" style="margin-bottom:20px;" onclick="addSection()">＋ Add Section</button>
-
-      <div class="btn-group">
-        <button class="btn btn-lime" id="customPreviewBtn" onclick="doCustomPreview()">👁️ Preview</button>
-      </div>
-      <div class="status" id="customStatus"></div>
-      <div id="customPreviewArea" class="hidden" style="margin-top:20px;">
-        <iframe class="preview-frame" id="customPreviewFrame" sandbox="allow-same-origin" style="height:600px;"></iframe>
-        <div class="btn-group" style="margin-top:12px;">
-          <button class="btn btn-lime" onclick="doCustomPreview()">🔄 Refresh Preview</button>
-          <button class="btn btn-amber" onclick="showCustomSendConfirm()">📤 Send to All Subscribers</button>
-        </div>
-        <div class="send-confirm hidden" id="customSendConfirm">
-          <p>⚠️ This will send this custom newsletter to <strong>all active subscribers</strong>. Are you sure?</p>
-          <div class="btn-group">
-            <button class="btn btn-red" id="customConfirmSendBtn" onclick="doCustomSend()">Yes, Send It</button>
-            <button class="btn btn-lime" onclick="hideCustomSendConfirm()">Cancel</button>
-          </div>
-        </div>
-        <div class="status" id="customSendStatus"></div>
-      </div>
-    </div>
-
-    <!-- Social Post Generator -->
-    <div class="gen-box" style="margin-top:24px;">
-      <h2 style="margin-bottom:16px; font-size:18px;">📱 Social Media Post Generator</h2>
-      <p style="color:#7A8070; font-size:13px; margin-bottom:16px;">Generate ready-to-paste posts for Facebook and X to promote ShieldSmart and drive subscriptions.</p>
-      <div class="field">
-        <label for="socialTopic">Topic / Angle (optional)</label>
-        <input type="text" id="socialTopic" placeholder="e.g. &quot;phone scams targeting seniors&quot; — leave blank for AI to pick" />
-      </div>
-      <button class="btn btn-lime" id="socialBtn" onclick="doSocialGen()">📱 Generate Posts</button>
-      <div class="status" id="socialStatus"></div>
-      <div id="socialResults" class="hidden" style="margin-top:20px;">
-        <div style="margin-bottom:20px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <label style="margin:0; font-size:14px; color:#5599ff;">Facebook</label>
-            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('fbPost')">📋 Copy</button>
-          </div>
-          <div id="fbPost" style="background:#1E201E; border:1px solid #2a2d2a; border-radius:8px; padding:14px; color:#F2F5E8; font-size:14px; line-height:1.6; white-space:pre-wrap;"></div>
-        </div>
-        <div style="margin-bottom:20px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <label style="margin:0; font-size:14px; color:#F2F5E8;">𝕏 Post (Option 1)</label>
-            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('twPost')">📋 Copy</button>
-          </div>
-          <div id="twPost" style="background:#1E201E; border:1px solid #2a2d2a; border-radius:8px; padding:14px; color:#F2F5E8; font-size:14px; line-height:1.6; white-space:pre-wrap;"></div>
-        </div>
-        <div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <label style="margin:0; font-size:14px; color:#F2F5E8;">𝕏 Post (Option 2)</label>
-            <button class="btn btn-lime" style="padding:4px 14px; font-size:12px;" onclick="copyText('twAltPost')">📋 Copy</button>
-          </div>
-          <div id="twAltPost" style="background:#1E201E; border:1px solid #2a2d2a; border-radius:8px; padding:14px; color:#F2F5E8; font-size:14px; line-height:1.6; white-space:pre-wrap;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Subscriber Report -->
-    <div class="gen-box" style="margin-top:24px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="font-size:18px;">👥 Subscriber Report</h2>
-        <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadSubscriberReport()">Refresh</button>
-      </div>
-      <div style="display:flex; gap:12px; margin-bottom:12px;">
-        <button class="btn btn-lime" style="padding:8px 14px; font-size:13px;" onclick="markSubscriberBaseline()">Set Baseline (start tracking)</button>
-        <div style="color:#7A8070; font-size:13px; display:flex; align-items:center;">Baseline: <span id="baselineLabel" style="margin-left:8px; color:#F2F5E8;">—</span></div>
-      </div>
-      <div id="subReport" style="color:#7A8070; font-size:14px;">Loading report...</div>
-    </div>
-
-    <!-- Manage Newsletters -->
-    <div class="gen-box" style="margin-top:24px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="font-size:18px;">🗂️ Manage Newsletters</h2>
-        <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadIssues()">Refresh</button>
-      </div>
-      <div id="issueList" style="color:#7A8070; font-size:14px;">Loading issues...</div>
-    </div>
-
-    <!-- Cron Log section -->
-    <div class="gen-box" style="margin-top:24px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="font-size:18px;">⏰ Cron Job History</h2>
-        <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadCronLogs()">Refresh</button>
-      </div>
-      <div id="cronLogs" style="color:#7A8070; font-size:14px;">Click Refresh to load cron logs.</div>
-    </div>
   </div>
 </div>
 
+<!-- ═══ SIDEBAR ═══ -->
+<div class="sidebar" id="sidebar" style="display:none;">
+  <div class="sidebar-logo">
+    <img src="/logo.png" alt="ShieldSmart" />
+    <h1><span class="s">SHIELD</span><span class="m">SMART</span><span class="sidebar-badge">ADMIN</span></h1>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-item active" onclick="switchTab('dashboard')">
+      <span class="nav-icon">📊</span><span>Dashboard</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('drafts')">
+      <span class="nav-icon">📋</span><span>Draft Queue</span><span class="nav-dot" id="draftDot"></span>
+    </div>
+    <div class="nav-item" onclick="switchTab('generate')">
+      <span class="nav-icon">📨</span><span>Generate</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('custom')">
+      <span class="nav-icon">✍️</span><span>Custom Writer</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('social')">
+      <span class="nav-icon">📱</span><span>Social Media</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('subscribers')">
+      <span class="nav-icon">👥</span><span>Subscribers</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('archive')">
+      <span class="nav-icon">🗂️</span><span>Archive</span>
+    </div>
+    <div class="nav-item" onclick="switchTab('cron')">
+      <span class="nav-icon">⏰</span><span>Cron Logs</span>
+    </div>
+  </div>
+  <div class="sidebar-footer">ShieldSmart &copy; XNL Tech</div>
+</div>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div class="main" id="mainPanel" style="display:none;">
+
+  <!-- ── Header ── -->
+  <div class="main-header">
+    <h2 id="viewTitle">Dashboard</h2>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span style="color:#7A8070;font-size:13px;" id="headerClock"></span>
+      <button class="btn btn-ghost btn-sm" onclick="location.href='/'">View Site</button>
+    </div>
+  </div>
+
+  <div class="main-content">
+
+    <!-- ═══════════ DASHBOARD ═══════════ -->
+    <div class="tab-view active" id="view-dashboard">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Active Subscribers</div>
+          <div class="stat-value" id="statActive">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Subscribers</div>
+          <div class="stat-value white" id="statTotal">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pending Drafts</div>
+          <div class="stat-value amber" id="statDrafts">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Issues Sent</div>
+          <div class="stat-value white" id="statIssues">—</div>
+        </div>
+      </div>
+
+      <div class="graph-wrap">
+        <h3>Subscriber Growth — Last 30 Days</h3>
+        <canvas class="graph-canvas" id="growthChart"></canvas>
+      </div>
+
+      <!-- Quick draft actions on dashboard -->
+      <div class="card">
+        <div class="card-header">
+          <h3>Drafts Awaiting Review</h3>
+          <button class="btn btn-ghost btn-sm" onclick="switchTab('drafts')">View All</button>
+        </div>
+        <div id="dashDraftList" style="color:#7A8070;font-size:14px;">Loading...</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Recent Cron Activity</h3>
+          <button class="btn btn-ghost btn-sm" onclick="switchTab('cron')">View All</button>
+        </div>
+        <div id="dashCronList" style="color:#7A8070;font-size:14px;">Loading...</div>
+      </div>
+    </div>
+
+    <!-- ═══════════ DRAFT QUEUE ═══════════ -->
+    <div class="tab-view" id="view-drafts">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <p style="color:#7A8070;font-size:13px;">Review, approve, or regenerate daily newsletter drafts. Drafts are auto-generated at 7 AM EST each weekday.</p>
+        <button class="btn btn-ghost btn-sm" onclick="loadDrafts()">Refresh</button>
+      </div>
+      <div id="draftList">Loading drafts...</div>
+
+      <!-- Draft Preview / Edit panel -->
+      <div id="draftPreviewArea" class="hidden" style="margin-top:24px;">
+        <div class="card" style="border-color:#BCE600;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h3 style="font-size:16px;">Draft Editor</h3>
+            <button class="btn btn-ghost btn-sm" onclick="closeDraftPreview()">Close</button>
+          </div>
+          <div id="draftQAReport"></div>
+          <div class="field">
+            <label for="draftSubjectEdit">Subject Line</label>
+            <input type="text" id="draftSubjectEdit" />
+          </div>
+          <iframe class="preview-frame" id="draftPreviewFrame" sandbox="allow-same-origin" style="height:500px;margin-bottom:16px;"></iframe>
+          <div class="field">
+            <label for="draftHtmlEdit">HTML Source <span style="color:#5A6050;font-weight:400;">(advanced)</span></label>
+            <textarea id="draftHtmlEdit" style="min-height:180px;font-family:'Cascadia Code',monospace;font-size:12px;"></textarea>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-lime" onclick="saveDraftEdits()">Save Edits</button>
+            <button class="btn btn-ghost" onclick="refreshDraftPreview()">Refresh Preview</button>
+            <button class="btn btn-ghost" onclick="regenerateDraft()">Regenerate</button>
+            <button class="btn btn-amber" onclick="approveDraft()">Approve &amp; Send</button>
+            <button class="btn btn-red btn-sm" onclick="discardDraft()">Discard</button>
+          </div>
+          <div class="status" id="draftEditStatus"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ GENERATE ═══════════ -->
+    <div class="tab-view" id="view-generate">
+      <div class="card">
+        <h3 style="margin-bottom:16px;">Generate from Reader Question</h3>
+        <div class="row">
+          <div class="field">
+            <label for="readerName">Reader Name (optional)</label>
+            <input type="text" id="readerName" placeholder="e.g. Sarah" />
+          </div>
+          <div class="field">
+            <label for="issueType">Issue Type</label>
+            <select id="issueType">
+              <option value="threat-radar">Monday — Threat Radar</option>
+              <option value="scam-spotlight">Tuesday — Scam Spotlight</option>
+              <option value="safety-skill">Wednesday — Safety Skill</option>
+              <option value="news-brief">Thursday — News Brief</option>
+              <option value="fix-it">Friday — Fix-It Help Desk</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="question">Reader Question</label>
+          <textarea id="question" placeholder="Paste the reader's question here..."></textarea>
+        </div>
+        <button class="btn btn-lime" id="genBtn" onclick="doGenerate()">Generate Newsletter</button>
+        <div class="status" id="genStatus"></div>
+      </div>
+
+      <div id="previewArea" class="hidden">
+        <div class="card">
+          <h3 style="margin-bottom:8px;">Preview</h3>
+          <p style="color:#7A8070;font-size:14px;margin-bottom:12px;" id="previewSubject"></p>
+          <iframe class="preview-frame" id="previewFrame" sandbox="allow-same-origin" style="height:600px;"></iframe>
+          <div class="btn-group" style="margin-top:16px;">
+            <button class="btn btn-ghost" onclick="doGenerate()">Regenerate</button>
+            <button class="btn btn-amber" id="sendBtn" onclick="showSendConfirm()">Send to All Subscribers</button>
+          </div>
+          <div class="send-confirm hidden" id="sendConfirm">
+            <p>This will send to <strong>all active subscribers</strong>. Continue?</p>
+            <div class="btn-group">
+              <button class="btn btn-red" id="confirmSendBtn" onclick="doSend()">Yes, Send It</button>
+              <button class="btn btn-ghost" onclick="hideSendConfirm()">Cancel</button>
+            </div>
+          </div>
+          <div class="status" id="sendStatus"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ CUSTOM WRITER ═══════════ -->
+    <div class="tab-view" id="view-custom">
+      <div class="card">
+        <h3 style="margin-bottom:6px;">Write Custom Newsletter</h3>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:18px;">Build a newsletter visually with styled sections.</p>
+        <div class="row">
+          <div class="field">
+            <label for="customSubject">Subject Line</label>
+            <input type="text" id="customSubject" placeholder="e.g. Special Announcement from ShieldSmart" />
+          </div>
+          <div class="field">
+            <label for="customType">Issue Type</label>
+            <select id="customType">
+              <option value="threat-radar">Monday — Threat Radar</option>
+              <option value="scam-spotlight">Tuesday — Scam Spotlight</option>
+              <option value="safety-skill">Wednesday — Safety Skill</option>
+              <option value="news-brief">Thursday — News Brief</option>
+              <option value="fix-it">Friday — Fix-It Help Desk</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Intro Paragraph <span style="color:#5A6050;font-weight:400;">(optional)</span></label>
+          <textarea id="customIntro" rows="3" placeholder="Hey ShieldSmart readers! This week we have something special..."></textarea>
+        </div>
+        <label style="margin-bottom:10px;">Sections</label>
+        <div id="sectionList"></div>
+        <button class="btn btn-ghost" style="margin-bottom:20px;" onclick="addSection()">+ Add Section</button>
+        <div class="btn-group">
+          <button class="btn btn-lime" id="customPreviewBtn" onclick="doCustomPreview()">Preview</button>
+        </div>
+        <div class="status" id="customStatus"></div>
+        <div id="customPreviewArea" class="hidden" style="margin-top:20px;">
+          <iframe class="preview-frame" id="customPreviewFrame" sandbox="allow-same-origin" style="height:600px;"></iframe>
+          <div class="btn-group" style="margin-top:12px;">
+            <button class="btn btn-ghost" onclick="doCustomPreview()">Refresh Preview</button>
+            <button class="btn btn-amber" onclick="showCustomSendConfirm()">Send to All Subscribers</button>
+          </div>
+          <div class="send-confirm hidden" id="customSendConfirm">
+            <p>This will send to <strong>all active subscribers</strong>. Continue?</p>
+            <div class="btn-group">
+              <button class="btn btn-red" id="customConfirmSendBtn" onclick="doCustomSend()">Yes, Send It</button>
+              <button class="btn btn-ghost" onclick="hideCustomSendConfirm()">Cancel</button>
+            </div>
+          </div>
+          <div class="status" id="customSendStatus"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ SOCIAL MEDIA ═══════════ -->
+    <div class="tab-view" id="view-social">
+      <div class="card">
+        <h3 style="margin-bottom:6px;">Social Media Post Generator</h3>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:18px;">Generate ready-to-paste posts for Facebook and X to promote ShieldSmart.</p>
+        <div class="field">
+          <label for="socialTopic">Topic / Angle (optional)</label>
+          <input type="text" id="socialTopic" placeholder='e.g. "phone scams targeting seniors" — leave blank for AI to pick' />
+        </div>
+        <button class="btn btn-lime" id="socialBtn" onclick="doSocialGen()">Generate Posts</button>
+        <div class="status" id="socialStatus"></div>
+        <div id="socialResults" class="hidden" style="margin-top:20px;">
+          <div style="margin-bottom:20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <label style="margin:0;font-size:14px;color:#5599ff;">Facebook</label>
+              <button class="btn btn-ghost btn-sm" onclick="copyText('fbPost')">Copy</button>
+            </div>
+            <div id="fbPost" style="background:#1E201E;border:1px solid #2a2d2a;border-radius:8px;padding:14px;color:#F2F5E8;font-size:14px;line-height:1.6;white-space:pre-wrap;"></div>
+          </div>
+          <div style="margin-bottom:20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <label style="margin:0;font-size:14px;color:#F2F5E8;">X Post (Option 1)</label>
+              <button class="btn btn-ghost btn-sm" onclick="copyText('twPost')">Copy</button>
+            </div>
+            <div id="twPost" style="background:#1E201E;border:1px solid #2a2d2a;border-radius:8px;padding:14px;color:#F2F5E8;font-size:14px;line-height:1.6;white-space:pre-wrap;"></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <label style="margin:0;font-size:14px;color:#F2F5E8;">X Post (Option 2)</label>
+              <button class="btn btn-ghost btn-sm" onclick="copyText('twAltPost')">Copy</button>
+            </div>
+            <div id="twAltPost" style="background:#1E201E;border:1px solid #2a2d2a;border-radius:8px;padding:14px;color:#F2F5E8;font-size:14px;line-height:1.6;white-space:pre-wrap;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ SUBSCRIBERS ═══════════ -->
+    <div class="tab-view" id="view-subscribers">
+      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:24px;">
+        <div class="stat-card">
+          <div class="stat-label">Active Subscribers</div>
+          <div class="stat-value" id="subStatActive">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Subscribers</div>
+          <div class="stat-value white" id="subStatTotal">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">New Since Baseline</div>
+          <div class="stat-value amber" id="subStatNew">—</div>
+        </div>
+      </div>
+
+      <div class="graph-wrap">
+        <h3>Subscriber Growth — Last 30 Days</h3>
+        <canvas class="graph-canvas" id="subGrowthChart"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Subscriber Report</h3>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <button class="btn btn-ghost btn-sm" onclick="markSubscriberBaseline()">Set Baseline</button>
+            <span style="color:#7A8070;font-size:12px;">Baseline: <span id="baselineLabel" style="color:#F2F5E8;">—</span></span>
+            <button class="btn btn-ghost btn-sm" onclick="loadSubscriberReport()">Refresh</button>
+          </div>
+        </div>
+        <div id="subReport" style="color:#7A8070;font-size:14px;">Loading report...</div>
+      </div>
+    </div>
+
+    <!-- ═══════════ ARCHIVE ═══════════ -->
+    <div class="tab-view" id="view-archive">
+      <div class="card">
+        <div class="card-header">
+          <h3>Sent Newsletters</h3>
+          <button class="btn btn-ghost btn-sm" onclick="loadIssues()">Refresh</button>
+        </div>
+        <div id="issueList" style="color:#7A8070;font-size:14px;">Loading issues...</div>
+      </div>
+    </div>
+
+    <!-- ═══════════ CRON LOGS ═══════════ -->
+    <div class="tab-view" id="view-cron">
+      <div class="card">
+        <div class="card-header">
+          <h3>Cron Job History</h3>
+          <button class="btn btn-ghost btn-sm" onclick="loadCronLogs()">Refresh</button>
+        </div>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:14px;">Stage 1 (7 AM EST): Generate draft &middot; Stage 2 (8 AM EST): QA check &middot; Stage 3 (10 AM EST): Auto-fix deadline</p>
+        <div id="cronLogs" style="color:#7A8070;font-size:14px;">Loading...</div>
+      </div>
+    </div>
+
+  </div><!-- /main-content -->
+</div><!-- /main -->
+
 <script>
-  let adminSecret = '';
-  let lastGenerated = null;
+let adminSecret = '';
+let lastGenerated = null;
+let currentDraftKey = null;
+let allDrafts = [];
 
-  function $(id) { return document.getElementById(id); }
+function $(id) { return document.getElementById(id); }
 
-  function setStatus(id, cls, msg) {
-    const el = $(id);
-    el.className = 'status ' + cls;
-    el.textContent = msg;
-  }
+function setStatus(id, cls, msg) {
+  const el = $(id);
+  if (!el) return;
+  el.className = 'status ' + cls;
+  el.textContent = msg;
+}
 
-  function doLogin() {
-    adminSecret = $('secret').value.trim();
-    if (!adminSecret) { setStatus('loginStatus', 'err', 'Please enter the admin secret.'); return; }
-    $('loginBox').classList.add('hidden');
-    $('mainPanel').classList.remove('hidden');
-    loadDrafts();
-    loadCronLogs();
-    loadSubCount();
-    loadSubscriberReport();
-    loadIssues();
-    setInterval(loadSubCount, 30000);
-    setInterval(loadCronLogs, 60000);
-    setInterval(loadDrafts, 60000);
-  }
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, function(c) {
+    return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c] || c;
+  });
+}
 
-  let currentDraftKey = null;
+var draftTypeLabel = { 'threat-radar':'Threat Radar','scam-spotlight':'Scam Spotlight','safety-skill':'Safety Skill','news-brief':'News Brief','fix-it':'Fix-It Help Desk',monday:'Threat Radar',wednesday:'Safety Skill',friday:'Fix-It Help Desk' };
+var draftTypeColor = { 'threat-radar':'#E8443A','scam-spotlight':'#FF6B35','safety-skill':'#BCE600','news-brief':'#5599FF','fix-it':'#F5A623',monday:'#E8443A',wednesday:'#BCE600',friday:'#F5A623' };
+var statusColorMap = { pending:'#F5A623',qa_passed:'#BCE600',needs_review:'#E8443A',sent:'#BCE600',discarded:'#7A8070',auto_fixed:'#5599FF',expired:'#7A8070' };
+var statusLabelMap = { pending:'Pending',qa_passed:'QA Passed',needs_review:'Needs Review',sent:'Sent',discarded:'Discarded',auto_fixed:'Auto-Fixed',expired:'Expired' };
 
-  var draftTypeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-  var draftTypeColor = { 'threat-radar': '#E8443A', 'scam-spotlight': '#FF6B35', 'safety-skill': '#BCE600', 'news-brief': '#5599FF', 'fix-it': '#F5A623', monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
-  var statusColor = { pending: '#F5A623', qa_passed: '#BCE600', needs_review: '#E8443A', sent: '#BCE600', discarded: '#7A8070', auto_fixed: '#5599FF', expired: '#7A8070' };
-  var statusLabel = { pending: 'PENDING', qa_passed: 'QA PASSED', needs_review: 'NEEDS REVIEW', sent: 'SENT', discarded: 'DISCARDED', auto_fixed: 'AUTO-FIXED', expired: 'EXPIRED' };
+// ── Clock ──
+function updateClock() {
+  var now = new Date();
+  var est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  $('headerClock').textContent = est.toLocaleString('en-US', { weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit', hour12:true }) + ' EST';
+}
 
-  async function loadDrafts() {
-    var el = $('draftList');
-    try {
-      var res = await fetch('/admin/drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret }) });
-      var data = await res.json();
-      if (!data.drafts || data.drafts.length === 0) { el.innerHTML = '<span style="color:#7A8070;">No drafts. The next draft will be generated at 7:00 AM EST.</span>'; return; }
-      el.innerHTML = data.drafts.map(function(d) {
-        var color = draftTypeColor[d.issueType] || '#BCE600';
-        var sColor = statusColor[d.status] || '#7A8070';
-        var badge = '<span style="display:inline-block;background:' + color + '18;border:1px solid ' + color + '44;color:' + color + ';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;">' + (draftTypeLabel[d.issueType] || d.issueType) + '</span>';
-        var sBadge = '<span style="display:inline-block;background:' + sColor + '18;border:1px solid ' + sColor + '44;color:' + sColor + ';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;">' + (statusLabel[d.status] || d.status) + '</span>';
-        var qaInfo = '';
-        if (d.qaResult) { qaInfo = ' <span style="color:' + (d.qaResult.pass ? '#BCE600' : '#E8443A') + ';font-size:11px;">(' + (d.qaResult.issueCount || 0) + ' issues)</span>'; }
-        var dt = d.generatedAt ? new Date(d.generatedAt).toLocaleString() : '';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1E201E;cursor:pointer;" onclick="openDraftPreview(&apos;' + d.dateKey + '&apos;)">'
-          + badge + ' ' + sBadge + qaInfo
-          + '<span style="flex:1;color:#F2F5E8;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (d.subject || '(no subject)') + '</span>'
-          + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + dt + '</span>'
-          + '</div>';
-      }).join('');
-    } catch (e) { el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>'; }
-  }
+// ── Tab switching ──
+function switchTab(tab) {
+  document.querySelectorAll('.tab-view').forEach(function(v) { v.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+  var view = $('view-' + tab);
+  if (view) view.classList.add('active');
+  var navItems = document.querySelectorAll('.nav-item');
+  var tabNames = ['dashboard','drafts','generate','custom','social','subscribers','archive','cron'];
+  var idx = tabNames.indexOf(tab);
+  if (idx >= 0 && navItems[idx]) navItems[idx].classList.add('active');
+  var titles = { dashboard:'Dashboard', drafts:'Draft Queue', generate:'Generate Newsletter', custom:'Custom Writer', social:'Social Media', subscribers:'Subscribers', archive:'Newsletter Archive', cron:'Cron Logs' };
+  $('viewTitle').textContent = titles[tab] || tab;
+  if (tab === 'subscribers') { loadSubscriberTab(); }
+  if (tab === 'cron') { loadCronLogs(); }
+  if (tab === 'archive') { loadIssues(); }
+}
 
-  async function openDraftPreview(dateKey) {
-    currentDraftKey = dateKey;
-    setStatus('draftEditStatus', '', '');
-    try {
-      var res = await fetch('/admin/draft-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: dateKey }) });
-      var data = await res.json();
-      if (!data.draft) { alert('Draft not found'); return; }
-      var d = data.draft;
-      $('draftSubjectEdit').value = d.subject || '';
-      $('draftHtmlEdit').value = d.html || '';
-      $('draftPreviewFrame').srcdoc = d.html || '';
-      $('draftPreviewArea').classList.remove('hidden');
-      $('draftPreviewArea').scrollIntoView({ behavior: 'smooth' });
+// ── Login ──
+function doLogin() {
+  adminSecret = $('secret').value.trim();
+  if (!adminSecret) { setStatus('loginStatus','err','Please enter the admin secret.'); return; }
+  $('loginOverlay').style.display = 'none';
+  $('sidebar').style.display = 'flex';
+  $('mainPanel').style.display = 'block';
+  initDashboard();
+  updateClock();
+  setInterval(updateClock, 30000);
+}
 
-      var qaEl = $('draftQAReport');
-      if (d.qaResult) {
-        qaEl.classList.remove('hidden');
-        var qr = d.qaResult;
-        var bgc = qr.pass ? '#1a2b1a' : '#2b1a1a';
-        var brc = qr.pass ? '#BCE600' : '#E8443A';
-        var issues = (qr.issues || []).map(function(i) { return '<div style="padding:4px 0;border-bottom:1px solid #2a2d2a;font-size:13px;"><strong style="color:#F5A623;">' + (i.type || i.severity || '') + ':</strong> ' + (i.description || i.issue || '') + (i.suggestion ? ' <span style="color:#BCE600;">Fix: ' + i.suggestion + '</span>' : '') + '</div>'; }).join('');
-        qaEl.innerHTML = '<div style="background:' + bgc + ';border:1px solid ' + brc + ';border-radius:8px;padding:16px;">'
-          + '<div style="font-size:14px;font-weight:700;color:' + brc + ';margin-bottom:8px;">QA Report: ' + (qr.pass ? 'PASSED' : 'ISSUES FOUND') + (qr.autoFixed ? ' (auto-fixed)' : '') + '</div>'
-          + '<div style="color:#7A8070;font-size:13px;margin-bottom:8px;">' + (qr.summary || '') + '</div>'
-          + issues + '</div>';
-      } else { qaEl.classList.add('hidden'); qaEl.innerHTML = ''; }
-    } catch (e) { alert('Error: ' + e.message); }
-  }
+function initDashboard() {
+  loadSubCount();
+  loadDrafts();
+  loadGrowthChart('growthChart');
+  loadCronLogs();
+  loadIssueCount();
+  setInterval(loadSubCount, 30000);
+  setInterval(loadDrafts, 60000);
+}
 
-  function closeDraftPreview() { $('draftPreviewArea').classList.add('hidden'); currentDraftKey = null; }
-
-  function refreshDraftPreview() { $('draftPreviewFrame').srcdoc = $('draftHtmlEdit').value; }
-
-  async function saveDraftEdits() {
-    if (!currentDraftKey) return;
-    try {
-      var res = await fetch('/admin/draft-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey, subject: $('draftSubjectEdit').value, html: $('draftHtmlEdit').value }) });
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setStatus('draftEditStatus', 'ok', 'Edits saved!');
-      refreshDraftPreview();
-      loadDrafts();
-    } catch (e) { setStatus('draftEditStatus', 'err', 'Save failed: ' + e.message); }
-  }
-
-  async function approveDraft() {
-    if (!currentDraftKey) return;
-    if (!confirm('Send this newsletter to ALL active subscribers?')) return;
-    setStatus('draftEditStatus', 'info', 'Sending to all subscribers...');
-    try {
-      var res = await fetch('/admin/draft-approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setStatus('draftEditStatus', 'ok', 'Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed.');
-      loadDrafts();
-    } catch (e) { setStatus('draftEditStatus', 'err', 'Send failed: ' + e.message); }
-  }
-
-  async function discardDraft() {
-    if (!currentDraftKey) return;
-    if (!confirm('Discard this draft? It will not be sent.')) return;
-    try {
-      var res = await fetch('/admin/draft-discard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      closeDraftPreview();
-      loadDrafts();
-    } catch (e) { alert('Discard failed: ' + e.message); }
-  }
-
-  async function regenerateDraft() {
-    if (!currentDraftKey) return;
-    if (!confirm('Regenerate this draft from scratch? Current content will be replaced.')) return;
-    setStatus('draftEditStatus', 'info', 'Regenerating with fresh threat intel... this may take 30-60 seconds.');
-    try {
-      var res = await fetch('/admin/draft-regenerate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      $('draftSubjectEdit').value = data.subject;
-      $('draftHtmlEdit').value = data.html;
-      $('draftPreviewFrame').srcdoc = data.html;
-      setStatus('draftEditStatus', 'ok', 'Regenerated! New subject: ' + data.subject);
-      loadDrafts();
-    } catch (e) { setStatus('draftEditStatus', 'err', 'Regenerate failed: ' + e.message); }
-  }
-
-  async function loadSubCount() {
-    try {
-      const res = await fetch('/subscribers', { headers: { 'X-Admin-Secret': adminSecret } });
-      const data = await res.json();
-      if (data.subscribers) {
-        const active = data.subscribers.filter(s => s.active).length;
-        $('subCount').textContent = active;
-        $('subTotal').textContent = data.subscribers.length;
-      }
-    } catch (_) {}
-  }
-
-  async function loadSubscriberReport() {
-    const el = $('subReport');
-    el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
-    try {
-      const res = await fetch('/admin/subscriber-report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load report');
-
-      const baseline = data.baselineAt ? new Date(data.baselineAt).toLocaleString() : '—';
-      $('baselineLabel').textContent = baseline;
-
-      const newCount = (data.newSubscribers || []).length;
-      const total = data.total || 0;
-      const active = data.active || 0;
-
-      let rows = '';
-      if (newCount === 0) {
-        rows = '<div style="color:#7A8070;">No new subscribers since baseline.</div>';
-      } else {
-        rows = '<div style="margin-bottom:10px;color:#F2F5E8;">New subscribers since baseline: <strong style="color:#BCE600;">' + newCount + '</strong></div>'
-          + '<div style="border-top:1px solid #1E201E; margin-top:10px; padding-top:10px;">'
-          + (data.newSubscribers || []).sort((a,b)=> (a.subscribedAt||'').localeCompare(b.subscribedAt||'')).map(function(s){
-              var name = ((s.firstName||'') + ' ' + (s.lastName||'')).trim() || '(no name)';
-              var when = s.subscribedAt ? new Date(s.subscribedAt).toLocaleString() : '';
-              return '<div style="display:flex; gap:10px; padding:8px 0; border-bottom:1px solid #1E201E;">'
-                + '<span style="flex:1; color:#F2F5E8;">' + escapeHtml(name) + ' <span style="color:#7A8070;">(' + escapeHtml(s.email||'') + ')</span></span>'
-                + '<span style="color:#7A8070; font-size:12px; white-space:nowrap;">' + escapeHtml(when) + '</span>'
-                + '</div>';
-            }).join('')
-          + '</div>';
-      }
-
-      el.innerHTML = ''
-        + '<div style="display:flex; gap:18px; margin-bottom:10px; color:#7A8070; font-size:13px;">'
-        + '<div>Total: <span style="color:#F2F5E8;">' + total + '</span></div>'
-        + '<div>Active: <span style="color:#BCE600;">' + active + '</span></div>'
-        + '</div>'
-        + rows;
-    } catch (e) {
-      el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>';
+// ── Subscriber count ──
+async function loadSubCount() {
+  try {
+    var res = await fetch('/subscribers', { headers: { 'X-Admin-Secret': adminSecret } });
+    var data = await res.json();
+    if (data.subscribers) {
+      var active = data.subscribers.filter(function(s) { return s.active; }).length;
+      var total = data.subscribers.length;
+      $('statActive').textContent = active;
+      $('statTotal').textContent = total;
+      if ($('subStatActive')) $('subStatActive').textContent = active;
+      if ($('subStatTotal')) $('subStatTotal').textContent = total;
     }
+  } catch (_) {}
+}
+
+// ── Issue count ──
+async function loadIssueCount() {
+  try {
+    var res = await fetch('/admin/list-issues', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    $('statIssues').textContent = (data.issues || []).length;
+  } catch (_) { $('statIssues').textContent = '—'; }
+}
+
+// ── Growth chart ──
+async function loadGrowthChart(canvasId) {
+  try {
+    var res = await fetch('/admin/growth-data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, days: 30 }) });
+    var data = await res.json();
+    drawChart($(canvasId), data.snapshots || []);
+  } catch (_) {
+    drawChart($(canvasId), []);
+  }
+}
+
+function drawChart(canvas, snapshots) {
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var w = rect.width, h = rect.height;
+  var pad = { top:24, right:20, bottom:36, left:50 };
+
+  ctx.clearRect(0, 0, w, h);
+
+  if (!snapshots || snapshots.length === 0) {
+    ctx.fillStyle = '#5A6050';
+    ctx.font = '14px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No growth data yet. Data appears after the first daily send.', w/2, h/2);
+    return;
   }
 
-  async function markSubscriberBaseline() {
-    try {
-      const res = await fetch('/admin/subscriber-baseline', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to set baseline');
-      await loadSubscriberReport();
-    } catch (e) {
-      alert('Baseline failed: ' + e.message);
+  var values = snapshots.map(function(s) { return s.totalActive || 0; });
+  var labels = snapshots.map(function(s) { return s.date; });
+  var maxVal = Math.max.apply(null, values);
+  var minVal = Math.min.apply(null, values);
+  if (maxVal === minVal) { maxVal += 1; minVal = Math.max(0, minVal - 1); }
+  var range = maxVal - minVal;
+  var plotW = w - pad.left - pad.right;
+  var plotH = h - pad.top - pad.bottom;
+
+  // Grid
+  ctx.strokeStyle = '#1E201E';
+  ctx.lineWidth = 1;
+  var gridCount = 4;
+  for (var g = 0; g <= gridCount; g++) {
+    var gy = pad.top + (plotH / gridCount) * g;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, gy);
+    ctx.lineTo(w - pad.right, gy);
+    ctx.stroke();
+    ctx.fillStyle = '#5A6050';
+    ctx.font = '11px -apple-system, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxVal - (range / gridCount) * g), pad.left - 10, gy + 4);
+  }
+
+  // Points
+  var pts = values.map(function(v, i) {
+    return {
+      x: pad.left + (plotW / Math.max(values.length - 1, 1)) * i,
+      y: pad.top + plotH - ((v - minVal) / range) * plotH
+    };
+  });
+
+  // Area fill
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pad.top + plotH);
+  pts.forEach(function(p) { ctx.lineTo(p.x, p.y); });
+  ctx.lineTo(pts[pts.length - 1].x, pad.top + plotH);
+  ctx.closePath();
+  var grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
+  grad.addColorStop(0, 'rgba(188,230,0,0.18)');
+  grad.addColorStop(1, 'rgba(188,230,0,0.01)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = '#BCE600';
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  pts.forEach(function(p, i) { i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); });
+  ctx.stroke();
+
+  // Dots
+  pts.forEach(function(p) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#BCE600';
+    ctx.fill();
+    ctx.strokeStyle = '#111311';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+
+  // X labels
+  ctx.fillStyle = '#5A6050';
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  var step = Math.max(1, Math.floor(labels.length / 7));
+  labels.forEach(function(l, i) {
+    if (i % step === 0 || i === labels.length - 1) {
+      var parts = l.split('-');
+      ctx.fillText(parts[1] + '/' + parts[2], pts[i].x, h - 8);
     }
-  }
+  });
+}
 
-  function escapeHtml(s) {
-    return String(s || '').replace(/[&<>"']/g, function(c) {
-      return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c] || c;
-    });
-  }
+// ── Drafts ──
+function makeBadge(text, color) {
+  return '<span class="badge-sm" style="background:' + color + '14;border:1px solid ' + color + '44;color:' + color + ';">' + text + '</span>';
+}
 
-  async function loadIssues() {
-    var el = $('issueList');
-    el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
-    try {
-      var res = await fetch('/admin/list-issues', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret }),
-      });
-      var data = await res.json();
-      if (!data.issues || data.issues.length === 0) {
-        el.innerHTML = '<span style="color:#7A8070;">No newsletters in archive yet.</span>';
-        return;
-      }
-      var typeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-      var typeColor = { 'threat-radar': '#E8443A', 'scam-spotlight': '#FF6B35', 'safety-skill': '#BCE600', 'news-brief': '#5599FF', 'fix-it': '#F5A623', monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
-      el.innerHTML = data.issues.map(function(issue) {
-        var d = new Date(issue.generatedAt).toLocaleString();
-        var label = typeLabel[issue.issueType] || 'ShieldSmart';
-        var color = typeColor[issue.issueType] || '#BCE600';
-        var badge = '<span style="display:inline-block;background:' + color + '18;border:1px solid ' + color + '44;color:' + color + ';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:0.05em;">' + label + '</span>';
-        var subj = issue.subject || '(no subject)';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1E201E;">'
-          + badge
-          + '<span style="flex:1;color:#F2F5E8;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + subj + '</span>'
-          + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + d + '</span>'
-          + '<button style="background:#2b1a1a;border:1px solid #e04040;color:#f88;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;" onclick="deleteIssue(&apos;' + issue.id.replace(/'/g, '') + '&apos;)">🗑️ Delete</button>'
-          + '</div>';
-      }).join('');
-    } catch (e) {
-      el.innerHTML = '<span style="color:#f88;">Failed to load: ' + e.message + '</span>';
+async function loadDrafts() {
+  try {
+    var res = await fetch('/admin/drafts', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    allDrafts = data.drafts || [];
+    renderDraftList();
+    renderDashDrafts();
+    updateDraftCount();
+  } catch (e) {
+    $('draftList').innerHTML = '<div style="color:#f88;">Failed: ' + e.message + '</div>';
+  }
+}
+
+function updateDraftCount() {
+  var pending = allDrafts.filter(function(d) { return d.status === 'pending' || d.status === 'qa_passed' || d.status === 'needs_review'; }).length;
+  $('statDrafts').textContent = pending;
+  var dot = $('draftDot');
+  if (dot) { if (pending > 0) dot.classList.add('show'); else dot.classList.remove('show'); }
+}
+
+function renderDraftList() {
+  var el = $('draftList');
+  if (!allDrafts || allDrafts.length === 0) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><p>No drafts yet. The next draft will be generated at 7:00 AM EST.</p></div>';
+    return;
+  }
+  el.innerHTML = allDrafts.map(function(d) {
+    var tColor = draftTypeColor[d.issueType] || '#BCE600';
+    var sColor = statusColorMap[d.status] || '#7A8070';
+    var needsAction = (d.status === 'pending' || d.status === 'qa_passed' || d.status === 'needs_review');
+    var qaInfo = '';
+    if (d.qaResult) qaInfo = '<span style="color:' + (d.qaResult.pass ? '#BCE600' : '#E8443A') + ';font-size:11px;">(' + (d.qaResult.issueCount||0) + ' QA issues)</span>';
+    var dt = d.generatedAt ? new Date(d.generatedAt).toLocaleString() : '';
+    var actions = '';
+    if (needsAction) {
+      actions = '<div class="draft-card-actions">'
+        + '<button class="btn btn-amber btn-sm" onclick="event.stopPropagation();quickApprove(\\'' + d.dateKey + '\\')">Approve &amp; Send</button>'
+        + '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();quickRegenerate(\\'' + d.dateKey + '\\')">Redraft</button>'
+        + '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openDraftPreview(\\'' + d.dateKey + '\\')">Edit</button>'
+        + '<button class="btn btn-red btn-sm" onclick="event.stopPropagation();quickDiscard(\\'' + d.dateKey + '\\')">Discard</button>'
+        + '</div>';
     }
-  }
-
-  async function deleteIssue(id) {
-    if (!confirm('Delete this newsletter?\\n\\n' + id + '\\n\\nThis cannot be undone.')) return;
-    try {
-      var res = await fetch('/admin/delete-issue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret, id: id }),
-      });
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Delete failed');
-      loadIssues();
-    } catch (e) {
-      alert('Delete failed: ' + e.message);
-    }
-  }
-
-  async function loadCronLogs() {
-    const el = $('cronLogs');
-    el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
-    try {
-      const res = await fetch('/admin/cron-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret }),
-      });
-      const data = await res.json();
-      if (!data.logs || data.logs.length === 0) {
-        el.innerHTML = '<span style="color:#7A8070;">No cron logs yet. Logs will appear after the next scheduled run.</span>';
-        return;
-      }
-      el.innerHTML = data.logs.map(l => {
-        const d = new Date(l.firedAt).toLocaleString();
-        const color = l.status === 'sent' ? '#BCE600' : l.status === 'error' ? '#f88' : '#F5A623';
-        const badge = '<span style="display:inline-block;background:' + color + ';color:#111;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;">' + l.status.toUpperCase() + '</span>';
-        let detail = l.subject ? ' — ' + l.subject : '';
-        if (l.sent !== undefined) detail += ' (' + l.sent + ' sent, ' + l.failed + ' failed)';
-        if (l.error) detail += ' — ' + l.error;
-        return '<div style="padding:8px 0;border-bottom:1px solid #1E201E;">' + badge + ' <span style="color:#7A8070;margin:0 8px;">' + d + '</span> <strong style="color:#F2F5E8;">' + l.issueType + '</strong>' + detail + '</div>';
-      }).join('');
-    } catch (e) {
-      el.innerHTML = '<span style="color:#f88;">Failed to load: ' + e.message + '</span>';
-    }
-  }
-
-  async function doGenerate() {
-    const question = $('question').value.trim();
-    const issueType = $('issueType').value;
-    const readerName = $('readerName').value.trim();
-    if (!question) { setStatus('genStatus', 'err', 'Please enter a reader question.'); return; }
-
-    $('genBtn').disabled = true;
-    $('genBtn').textContent = '⏳ Generating...';
-    setStatus('genStatus', 'info', 'Calling AI to generate newsletter... this may take 30-60 seconds.');
-    $('previewArea').classList.add('hidden');
-    $('sendConfirm').classList.add('hidden');
-
-    try {
-      const res = await fetch('/admin/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret, question, issueType, readerName }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Generation failed');
-
-      lastGenerated = data;
-      $('previewSubject').textContent = '📋 Subject: ' + data.subject;
-      const frame = $('previewFrame');
-      frame.srcdoc = data.html;
-      frame.style.height = '600px';
-      $('previewArea').classList.remove('hidden');
-      setStatus('genStatus', 'ok', 'Newsletter generated! Preview it below, then send when ready.');
-    } catch (e) {
-      setStatus('genStatus', 'err', 'Error: ' + e.message);
-    } finally {
-      $('genBtn').disabled = false;
-      $('genBtn').textContent = '⚡ Generate Newsletter';
-    }
-  }
-
-  async function doSocialGen() {
-    const topic = $('socialTopic').value.trim();
-    $('socialBtn').disabled = true;
-    $('socialBtn').textContent = '⏳ Generating...';
-    setStatus('socialStatus', 'info', 'Generating social posts... ~15 seconds.');
-    $('socialResults').classList.add('hidden');
-
-    try {
-      const res = await fetch('/admin/social', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret, topic }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Generation failed');
-
-      $('fbPost').textContent = data.facebook;
-      $('twPost').textContent = data.twitter;
-      $('twAltPost').textContent = data.twitterAlt;
-      $('socialResults').classList.remove('hidden');
-      setStatus('socialStatus', 'ok', 'Posts generated! Copy and paste into each platform.');
-    } catch (e) {
-      setStatus('socialStatus', 'err', 'Error: ' + e.message);
-    } finally {
-      $('socialBtn').disabled = false;
-      $('socialBtn').textContent = '📱 Generate Posts';
-    }
-  }
-
-  function copyText(id) {
-    const text = $(id).textContent;
-    navigator.clipboard.writeText(text).then(() => {
-      const btn = $(id).parentElement.querySelector('.btn');
-      const orig = btn.textContent;
-      btn.textContent = '✅ Copied!';
-      setTimeout(() => btn.textContent = orig, 1500);
-    });
-  }
-
-  function showSendConfirm() { $('sendConfirm').classList.remove('hidden'); }
-  function hideSendConfirm() { $('sendConfirm').classList.add('hidden'); }
-
-  let lastCustom = null;
-  let sectionCount = 0;
-
-  function addSection(title, content, style) {
-    sectionCount++;
-    const id = sectionCount;
-    const div = document.createElement('div');
-    div.className = 'sec-card';
-    div.dataset.id = id;
-    div.innerHTML = '<div class="sec-header">'
-      + '<span class="sec-num">' + id + '</span>'
-      + '<input type="text" class="sec-title" placeholder="Section heading (e.g. What Happened, Why It Matters, What To Do)" value="' + (title || '').replace(/"/g, '&quot;') + '" />'
-      + '<div class="sec-actions">'
-      + '<button title="Move up" onclick="moveSection(this,-1)">▲</button>'
-      + '<button title="Move down" onclick="moveSection(this,1)">▼</button>'
-      + '<button title="Remove" onclick="removeSection(this)">✕</button>'
-      + '</div></div>'
-      + '<div class="sec-style-row">'
-      + '<span class="sec-style-opt' + ((!style || style === 'default') ? ' active' : '') + '" onclick="pickStyle(this,&apos;default&apos;)">Default</span>'
-      + '<span class="sec-style-opt' + ((style === 'callout') ? ' active' : '') + '" onclick="pickStyle(this,&apos;callout&apos;)">⚡ Callout</span>'
-      + '<span class="sec-style-opt' + ((style === 'warning') ? ' active' : '') + '" onclick="pickStyle(this,&apos;warning&apos;)">⚠️ Warning</span>'
-      + '<span class="sec-style-opt' + ((style === 'tip') ? ' active' : '') + '" onclick="pickStyle(this,&apos;tip&apos;)">💡 Tip</span>'
-      + '<span class="sec-style-opt' + ((style === 'steps') ? ' active' : '') + '" onclick="pickStyle(this,&apos;steps&apos;)">📋 Steps</span>'
+    return '<div class="draft-card' + (needsAction ? ' needs-action' : '') + '" onclick="openDraftPreview(\\'' + d.dateKey + '\\')">'
+      + '<div class="draft-card-top">'
+      + makeBadge(draftTypeLabel[d.issueType] || d.issueType, tColor) + ' '
+      + makeBadge(statusLabelMap[d.status] || d.status, sColor) + ' '
+      + qaInfo
+      + '<span class="draft-card-subject">' + escapeHtml(d.subject || '(no subject)') + '</span>'
+      + '<span class="draft-card-meta">' + dt + '</span>'
       + '</div>'
-      + '<div class="sec-body">'
-      + '<div class="sec-toolbar">'
-      + '<button onclick="fmt(this,&apos;bold&apos;)"><b>B</b></button>'
-      + '<button onclick="fmt(this,&apos;italic&apos;)"><i>I</i></button>'
-      + '<button onclick="fmt(this,&apos;insertUnorderedList&apos;)">• List</button>'
-      + '<button onclick="fmt(this,&apos;insertOrderedList&apos;)">1. List</button>'
-      + '<button onclick="fmtLink(this)">🔗 Link</button>'
-      + '</div>'
-      + '<div class="sec-editor" contenteditable="true" data-placeholder="Write your content here…">' + (content || '') + '</div>'
+      + actions
       + '</div>';
-    $('sectionList').appendChild(div);
-    renumberSections();
-  }
+  }).join('');
+}
 
-  function removeSection(btn) {
-    btn.closest('.sec-card').remove();
-    renumberSections();
+function renderDashDrafts() {
+  var el = $('dashDraftList');
+  var actionable = allDrafts.filter(function(d) { return d.status === 'pending' || d.status === 'qa_passed' || d.status === 'needs_review'; });
+  if (actionable.length === 0) {
+    el.innerHTML = '<div style="color:#5A6050;text-align:center;padding:24px;">No drafts awaiting review</div>';
+    return;
   }
+  el.innerHTML = actionable.map(function(d) {
+    var tColor = draftTypeColor[d.issueType] || '#BCE600';
+    var sColor = statusColorMap[d.status] || '#7A8070';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #1E201E;flex-wrap:wrap;">'
+      + makeBadge(draftTypeLabel[d.issueType] || d.issueType, tColor) + ' '
+      + makeBadge(statusLabelMap[d.status] || d.status, sColor)
+      + '<span style="flex:1;min-width:150px;color:#F2F5E8;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(d.subject || '(no subject)') + '</span>'
+      + '<div style="display:flex;gap:6px;">'
+      + '<button class="btn btn-amber btn-sm" onclick="quickApprove(\\'' + d.dateKey + '\\')">Approve</button>'
+      + '<button class="btn btn-ghost btn-sm" onclick="quickRegenerate(\\'' + d.dateKey + '\\')">Redraft</button>'
+      + '<button class="btn btn-ghost btn-sm" onclick="switchTab(\\'drafts\\');openDraftPreview(\\'' + d.dateKey + '\\')">Edit</button>'
+      + '</div></div>';
+  }).join('');
+}
 
-  function moveSection(btn, dir) {
-    const card = btn.closest('.sec-card');
-    const list = $('sectionList');
-    if (dir === -1 && card.previousElementSibling) {
-      list.insertBefore(card, card.previousElementSibling);
-    } else if (dir === 1 && card.nextElementSibling) {
-      list.insertBefore(card.nextElementSibling, card);
+async function quickApprove(dateKey) {
+  if (!confirm('Send this newsletter to ALL active subscribers?')) return;
+  try {
+    var res = await fetch('/admin/draft-approve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: dateKey }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert('Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed.');
+    loadDrafts();
+  } catch (e) { alert('Send failed: ' + e.message); }
+}
+
+async function quickRegenerate(dateKey) {
+  if (!confirm('Regenerate this draft from scratch?')) return;
+  try {
+    var res = await fetch('/admin/draft-regenerate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: dateKey }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert('Regenerated! New subject: ' + data.subject);
+    loadDrafts();
+  } catch (e) { alert('Regenerate failed: ' + e.message); }
+}
+
+async function quickDiscard(dateKey) {
+  if (!confirm('Discard this draft?')) return;
+  try {
+    var res = await fetch('/admin/draft-discard', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: dateKey }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    loadDrafts();
+  } catch (e) { alert('Discard failed: ' + e.message); }
+}
+
+async function openDraftPreview(dateKey) {
+  currentDraftKey = dateKey;
+  setStatus('draftEditStatus', '', '');
+  try {
+    var res = await fetch('/admin/draft-preview', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: dateKey }) });
+    var data = await res.json();
+    if (!data.draft) { alert('Draft not found'); return; }
+    var d = data.draft;
+    $('draftSubjectEdit').value = d.subject || '';
+    $('draftHtmlEdit').value = d.html || '';
+    $('draftPreviewFrame').srcdoc = d.html || '';
+    $('draftPreviewArea').classList.remove('hidden');
+    $('draftPreviewArea').scrollIntoView({ behavior: 'smooth' });
+
+    var qaEl = $('draftQAReport');
+    if (d.qaResult) {
+      var qr = d.qaResult;
+      var issues = (qr.issues || []).map(function(i) {
+        return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px;">'
+          + '<strong style="color:#F5A623;">' + (i.type || i.severity || '') + ':</strong> '
+          + (i.description || i.issue || '')
+          + (i.suggestion ? ' <span style="color:#BCE600;">Suggested fix: ' + i.suggestion + '</span>' : '')
+          + '</div>';
+      }).join('');
+      qaEl.innerHTML = '<div class="qa-box ' + (qr.pass ? 'qa-pass' : 'qa-fail') + '">'
+        + '<div style="font-size:14px;font-weight:700;color:' + (qr.pass ? '#BCE600' : '#E8443A') + ';margin-bottom:8px;">QA Report: ' + (qr.pass ? 'PASSED' : 'ISSUES FOUND') + (qr.autoFixed ? ' (auto-fixed)' : '') + '</div>'
+        + '<div style="color:#7A8070;font-size:13px;margin-bottom:8px;">' + (qr.summary || '') + '</div>'
+        + issues + '</div>';
+    } else { qaEl.innerHTML = ''; }
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+function closeDraftPreview() { $('draftPreviewArea').classList.add('hidden'); currentDraftKey = null; }
+function refreshDraftPreview() { $('draftPreviewFrame').srcdoc = $('draftHtmlEdit').value; }
+
+async function saveDraftEdits() {
+  if (!currentDraftKey) return;
+  try {
+    var res = await fetch('/admin/draft-edit', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey, subject: $('draftSubjectEdit').value, html: $('draftHtmlEdit').value }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    setStatus('draftEditStatus', 'ok', 'Edits saved!');
+    refreshDraftPreview();
+    loadDrafts();
+  } catch (e) { setStatus('draftEditStatus', 'err', 'Save failed: ' + e.message); }
+}
+
+async function approveDraft() {
+  if (!currentDraftKey) return;
+  if (!confirm('Send this newsletter to ALL active subscribers?')) return;
+  setStatus('draftEditStatus', 'info', 'Sending...');
+  try {
+    var res = await fetch('/admin/draft-approve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    setStatus('draftEditStatus', 'ok', 'Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed.');
+    loadDrafts();
+  } catch (e) { setStatus('draftEditStatus', 'err', 'Send failed: ' + e.message); }
+}
+
+async function discardDraft() {
+  if (!currentDraftKey) return;
+  if (!confirm('Discard this draft? It will not be sent.')) return;
+  try {
+    var res = await fetch('/admin/draft-discard', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    closeDraftPreview();
+    loadDrafts();
+  } catch (e) { alert('Discard failed: ' + e.message); }
+}
+
+async function regenerateDraft() {
+  if (!currentDraftKey) return;
+  if (!confirm('Regenerate this draft from scratch?')) return;
+  setStatus('draftEditStatus', 'info', 'Regenerating with fresh threat intel... 30-60 seconds.');
+  try {
+    var res = await fetch('/admin/draft-regenerate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    $('draftSubjectEdit').value = data.subject;
+    $('draftHtmlEdit').value = data.html;
+    $('draftPreviewFrame').srcdoc = data.html;
+    setStatus('draftEditStatus', 'ok', 'Regenerated! New subject: ' + data.subject);
+    loadDrafts();
+  } catch (e) { setStatus('draftEditStatus', 'err', 'Regenerate failed: ' + e.message); }
+}
+
+// ── Subscriber tab ──
+async function loadSubscriberTab() {
+  loadSubCount();
+  loadGrowthChart('subGrowthChart');
+  loadSubscriberReport();
+}
+
+async function loadSubscriberReport() {
+  var el = $('subReport');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
+  try {
+    var res = await fetch('/admin/subscriber-report', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+
+    var baseline = data.baselineAt ? new Date(data.baselineAt).toLocaleString() : '—';
+    $('baselineLabel').textContent = baseline;
+
+    var newCount = (data.newSubscribers || []).length;
+    if ($('subStatNew')) $('subStatNew').textContent = newCount;
+
+    var rows = '';
+    if (newCount === 0) {
+      rows = '<div style="color:#7A8070;text-align:center;padding:16px;">No new subscribers since baseline.</div>';
+    } else {
+      rows = (data.newSubscribers || []).sort(function(a,b){ return (a.subscribedAt||'').localeCompare(b.subscribedAt||''); }).map(function(s) {
+        var name = ((s.firstName||'') + ' ' + (s.lastName||'')).trim() || '(no name)';
+        var when = s.subscribedAt ? new Date(s.subscribedAt).toLocaleString() : '';
+        return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #1E201E;">'
+          + '<span style="flex:1;color:#F2F5E8;font-size:14px;">' + escapeHtml(name) + ' <span style="color:#7A8070;">(' + escapeHtml(s.email||'') + ')</span></span>'
+          + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + escapeHtml(when) + '</span></div>';
+      }).join('');
     }
-    renumberSections();
+    el.innerHTML = rows;
+  } catch (e) {
+    el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>';
   }
+}
 
-  function renumberSections() {
-    document.querySelectorAll('#sectionList .sec-card').forEach(function(c, i) {
-      c.querySelector('.sec-num').textContent = i + 1;
-    });
-  }
+async function markSubscriberBaseline() {
+  try {
+    var res = await fetch('/admin/subscriber-baseline', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    loadSubscriberReport();
+  } catch (e) { alert('Baseline failed: ' + e.message); }
+}
 
-  function pickStyle(el, style) {
-    el.parentElement.querySelectorAll('.sec-style-opt').forEach(function(s) { s.classList.remove('active'); });
-    el.classList.add('active');
-  }
-
-  function fmt(btn, cmd) {
-    var editor = btn.closest('.sec-body').querySelector('.sec-editor');
-    editor.focus();
-    document.execCommand(cmd, false, null);
-  }
-
-  function fmtLink(btn) {
-    var url = prompt('Enter URL:');
-    if (url) {
-      var editor = btn.closest('.sec-body').querySelector('.sec-editor');
-      editor.focus();
-      document.execCommand('createLink', false, url);
+// ── Issues (archive) ──
+async function loadIssues() {
+  var el = $('issueList');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
+  try {
+    var res = await fetch('/admin/list-issues', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    if (!data.issues || data.issues.length === 0) {
+      el.innerHTML = '<div class="empty-state"><div class="empty-icon">🗂️</div><p>No newsletters in archive yet.</p></div>';
+      return;
     }
-  }
+    el.innerHTML = data.issues.map(function(issue) {
+      var d = new Date(issue.generatedAt).toLocaleString();
+      var label = draftTypeLabel[issue.issueType] || 'ShieldSmart';
+      var color = draftTypeColor[issue.issueType] || '#BCE600';
+      return '<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #1E201E;">'
+        + makeBadge(label, color)
+        + '<span style="flex:1;color:#F2F5E8;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(issue.subject || '(no subject)') + '</span>'
+        + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + d + '</span>'
+        + '<button class="btn btn-red btn-sm" onclick="deleteIssue(\\'' + (issue.id||'').replace(/'/g, '') + '\\')">Delete</button>'
+        + '</div>';
+    }).join('');
+  } catch (e) { el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>'; }
+}
 
-  function getActiveStyle(card) {
-    const active = card.querySelector('.sec-style-opt.active');
-    if (!active) return 'default';
-    if (active.textContent.includes('Callout')) return 'callout';
-    if (active.textContent.includes('Warning')) return 'warning';
-    if (active.textContent.includes('Tip')) return 'tip';
-    if (active.textContent.includes('Steps')) return 'steps';
-    return 'default';
-  }
+async function deleteIssue(id) {
+  if (!confirm('Delete this newsletter? This cannot be undone.')) return;
+  try {
+    var res = await fetch('/admin/delete-issue', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, id: id }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Delete failed');
+    loadIssues();
+    loadIssueCount();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+}
 
-  function buildSectionHtml(title, content, style) {
-    var bg, border, headerColor, icon;
-    switch (style) {
-      case 'callout':
-        bg = '#1A2600'; border = '#4A6600'; headerColor = '#BCE600'; icon = '⚡';
-        break;
-      case 'warning':
-        bg = '#2B1A00'; border = '#8B5E00'; headerColor = '#F5A623'; icon = '⚠️';
-        break;
-      case 'tip':
-        bg = '#0D1A2B'; border = '#1A4070'; headerColor = '#5599FF'; icon = '💡';
-        break;
-      case 'steps':
-        bg = '#1A1E1A'; border = '#3A3D3A'; headerColor = '#BCE600'; icon = '📋';
-        break;
-      default:
-        bg = '#1E201E'; border = '#2A2C2A'; headerColor = '#BCE600'; icon = '';
+// ── Cron logs ──
+async function loadCronLogs() {
+  var el = $('cronLogs');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
+  try {
+    var res = await fetch('/admin/cron-logs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    if (!data.logs || data.logs.length === 0) {
+      el.innerHTML = '<div style="color:#5A6050;text-align:center;padding:24px;">No cron logs yet.</div>';
+      renderDashCron([]);
+      return;
     }
+    renderDashCron(data.logs.slice(0, 5));
+    el.innerHTML = data.logs.map(function(l) {
+      var d = new Date(l.firedAt).toLocaleString();
+      var color = l.status === 'sent' ? '#BCE600' : l.status === 'error' ? '#f88' : '#F5A623';
+      var detail = l.subject ? ' — ' + escapeHtml(l.subject) : '';
+      if (l.sent !== undefined) detail += ' (' + l.sent + ' sent, ' + l.failed + ' failed)';
+      if (l.error) detail += ' — ' + escapeHtml(l.error);
+      return '<div style="padding:10px 0;border-bottom:1px solid #1E201E;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+        + makeBadge(l.status.toUpperCase(), color)
+        + '<span style="color:#7A8070;font-size:12px;">' + d + '</span>'
+        + '<strong style="color:#F2F5E8;font-size:13px;">' + escapeHtml(l.issueType||'') + '</strong>'
+        + '<span style="color:#7A8070;font-size:13px;">' + detail + '</span></div>';
+    }).join('');
+  } catch (e) { el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>'; }
+}
 
-    var html = '<div style="background-color:' + bg + ';border:1px solid ' + border + ';border-radius:12px;padding:28px 30px;margin-bottom:25px;">';
-    if (title) {
-      html += '<h2 style="color:' + headerColor + ';font-family:Arial,sans-serif;font-size:20px;font-weight:700;margin:0 0 16px;">' + (icon ? icon + ' ' : '') + escHtml(title) + '</h2>';
-    }
-    html += '<div style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;">' + content + '</div>';
-    html += '</div>';
-    return html;
+function renderDashCron(logs) {
+  var el = $('dashCronList');
+  if (!el) return;
+  if (!logs || logs.length === 0) {
+    el.innerHTML = '<div style="color:#5A6050;text-align:center;padding:24px;">No cron activity yet.</div>';
+    return;
   }
+  el.innerHTML = logs.map(function(l) {
+    var d = new Date(l.firedAt).toLocaleString();
+    var color = l.status === 'sent' ? '#BCE600' : l.status === 'error' ? '#f88' : '#F5A623';
+    return '<div style="padding:8px 0;border-bottom:1px solid #1E201E;display:flex;align-items:center;gap:8px;">'
+      + makeBadge(l.status.toUpperCase(), color)
+      + '<span style="color:#7A8070;font-size:12px;">' + d + '</span>'
+      + '<span style="color:#F2F5E8;font-size:13px;">' + escapeHtml(l.issueType||'') + '</span></div>';
+  }).join('');
+}
 
-  function escHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// ── Generate newsletter ──
+async function doGenerate() {
+  var question = $('question').value.trim();
+  var issueType = $('issueType').value;
+  var readerName = $('readerName').value.trim();
+  if (!question) { setStatus('genStatus','err','Please enter a reader question.'); return; }
+  $('genBtn').disabled = true;
+  $('genBtn').textContent = 'Generating...';
+  setStatus('genStatus','info','Calling AI to generate newsletter... 30-60 seconds.');
+  $('previewArea').classList.add('hidden');
+  $('sendConfirm').classList.add('hidden');
+  try {
+    var res = await fetch('/admin/generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, question:question, issueType:issueType, readerName:readerName }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Generation failed');
+    lastGenerated = data;
+    $('previewSubject').textContent = 'Subject: ' + data.subject;
+    $('previewFrame').srcdoc = data.html;
+    $('previewFrame').style.height = '600px';
+    $('previewArea').classList.remove('hidden');
+    setStatus('genStatus','ok','Newsletter generated! Preview below.');
+  } catch (e) { setStatus('genStatus','err','Error: ' + e.message); }
+  finally { $('genBtn').disabled = false; $('genBtn').textContent = 'Generate Newsletter'; }
+}
+
+function showSendConfirm() { $('sendConfirm').classList.remove('hidden'); }
+function hideSendConfirm() { $('sendConfirm').classList.add('hidden'); }
+
+async function doSend() {
+  if (!lastGenerated) return;
+  $('confirmSendBtn').disabled = true;
+  $('confirmSendBtn').textContent = 'Sending...';
+  setStatus('sendStatus','info','Sending to all subscribers...');
+  try {
+    var res = await fetch('/admin/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, subject: lastGenerated.subject, htmlContent: lastGenerated.html, issueType: lastGenerated.issueType }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Send failed');
+    setStatus('sendStatus','ok','Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed out of ' + data.total + '.');
+    hideSendConfirm();
+  } catch (e) { setStatus('sendStatus','err','Error: ' + e.message); }
+  finally { $('confirmSendBtn').disabled = false; $('confirmSendBtn').textContent = 'Yes, Send It'; }
+}
+
+// ── Social media ──
+async function doSocialGen() {
+  var topic = $('socialTopic').value.trim();
+  $('socialBtn').disabled = true;
+  $('socialBtn').textContent = 'Generating...';
+  setStatus('socialStatus','info','Generating social posts... ~15 seconds.');
+  $('socialResults').classList.add('hidden');
+  try {
+    var res = await fetch('/admin/social', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, topic:topic }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Generation failed');
+    $('fbPost').textContent = data.facebook;
+    $('twPost').textContent = data.twitter;
+    $('twAltPost').textContent = data.twitterAlt;
+    $('socialResults').classList.remove('hidden');
+    setStatus('socialStatus','ok','Posts generated!');
+  } catch (e) { setStatus('socialStatus','err','Error: ' + e.message); }
+  finally { $('socialBtn').disabled = false; $('socialBtn').textContent = 'Generate Posts'; }
+}
+
+function copyText(id) {
+  var text = $(id).textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = $(id).parentElement.querySelector('.btn');
+    var orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = orig; }, 1500);
+  });
+}
+
+// ── Custom writer ──
+var lastCustom = null;
+var sectionCount = 0;
+
+function addSection(title, content, style) {
+  sectionCount++;
+  var id = sectionCount;
+  var div = document.createElement('div');
+  div.className = 'sec-card';
+  div.dataset.id = id;
+  div.innerHTML = '<div class="sec-header">'
+    + '<span class="sec-num">' + id + '</span>'
+    + '<input type="text" class="sec-title" placeholder="Section heading" value="' + (title || '').replace(/"/g, '&quot;') + '" />'
+    + '<div class="sec-actions">'
+    + '<button title="Move up" onclick="moveSection(this,-1)">&#9650;</button>'
+    + '<button title="Move down" onclick="moveSection(this,1)">&#9660;</button>'
+    + '<button title="Remove" onclick="removeSection(this)">&#10005;</button>'
+    + '</div></div>'
+    + '<div class="sec-style-row">'
+    + '<span class="sec-style-opt' + ((!style||style==='default')?' active':'') + '" onclick="pickStyle(this,\\'default\\')">Default</span>'
+    + '<span class="sec-style-opt' + ((style==='callout')?' active':'') + '" onclick="pickStyle(this,\\'callout\\')">Callout</span>'
+    + '<span class="sec-style-opt' + ((style==='warning')?' active':'') + '" onclick="pickStyle(this,\\'warning\\')">Warning</span>'
+    + '<span class="sec-style-opt' + ((style==='tip')?' active':'') + '" onclick="pickStyle(this,\\'tip\\')">Tip</span>'
+    + '<span class="sec-style-opt' + ((style==='steps')?' active':'') + '" onclick="pickStyle(this,\\'steps\\')">Steps</span>'
+    + '</div>'
+    + '<div class="sec-body">'
+    + '<div class="sec-toolbar">'
+    + '<button onclick="fmt(this,\\'bold\\')"><b>B</b></button>'
+    + '<button onclick="fmt(this,\\'italic\\')"><i>I</i></button>'
+    + '<button onclick="fmt(this,\\'insertUnorderedList\\')">&#8226; List</button>'
+    + '<button onclick="fmt(this,\\'insertOrderedList\\')">1. List</button>'
+    + '<button onclick="fmtLink(this)">Link</button>'
+    + '</div>'
+    + '<div class="sec-editor" contenteditable="true">' + (content || '') + '</div>'
+    + '</div>';
+  $('sectionList').appendChild(div);
+  renumberSections();
+}
+
+function removeSection(btn) { btn.closest('.sec-card').remove(); renumberSections(); }
+function moveSection(btn, dir) {
+  var card = btn.closest('.sec-card');
+  var list = $('sectionList');
+  if (dir === -1 && card.previousElementSibling) list.insertBefore(card, card.previousElementSibling);
+  else if (dir === 1 && card.nextElementSibling) list.insertBefore(card.nextElementSibling, card);
+  renumberSections();
+}
+function renumberSections() { document.querySelectorAll('#sectionList .sec-card').forEach(function(c,i){ c.querySelector('.sec-num').textContent = i+1; }); }
+function pickStyle(el) { el.parentElement.querySelectorAll('.sec-style-opt').forEach(function(s){ s.classList.remove('active'); }); el.classList.add('active'); }
+function fmt(btn, cmd) { var ed = btn.closest('.sec-body').querySelector('.sec-editor'); ed.focus(); document.execCommand(cmd, false, null); }
+function fmtLink(btn) { var url = prompt('Enter URL:'); if(url){ var ed = btn.closest('.sec-body').querySelector('.sec-editor'); ed.focus(); document.execCommand('createLink',false,url); } }
+
+function getActiveStyle(card) {
+  var active = card.querySelector('.sec-style-opt.active');
+  if (!active) return 'default';
+  var txt = active.textContent;
+  if (txt.includes('Callout')) return 'callout';
+  if (txt.includes('Warning')) return 'warning';
+  if (txt.includes('Tip')) return 'tip';
+  if (txt.includes('Steps')) return 'steps';
+  return 'default';
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function buildSectionHtml(title, content, style) {
+  var bg, border, headerColor, icon;
+  switch (style) {
+    case 'callout': bg='#1A2600';border='#4A6600';headerColor='#BCE600';icon='\\u26A1';break;
+    case 'warning': bg='#2B1A00';border='#8B5E00';headerColor='#F5A623';icon='\\u26A0\\uFE0F';break;
+    case 'tip': bg='#0D1A2B';border='#1A4070';headerColor='#5599FF';icon='\\uD83D\\uDCA1';break;
+    case 'steps': bg='#1A1E1A';border='#3A3D3A';headerColor='#BCE600';icon='\\uD83D\\uDCCB';break;
+    default: bg='#1E201E';border='#2A2C2A';headerColor='#BCE600';icon='';
   }
+  var h = '<div style="background-color:'+bg+';border:1px solid '+border+';border-radius:12px;padding:28px 30px;margin-bottom:25px;">';
+  if (title) h += '<h2 style="color:'+headerColor+';font-family:Arial,sans-serif;font-size:20px;font-weight:700;margin:0 0 16px;">'+(icon?icon+' ':'')+escHtml(title)+'</h2>';
+  h += '<div style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;">'+content+'</div></div>';
+  return h;
+}
 
-  function buildRawHtml() {
-    var parts = [];
-    var intro = $('customIntro').value.trim();
-    if (intro) {
-      parts.push('<p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin-bottom:25px;">' + escHtml(intro).replace(/\\n/g, '<br/>') + '</p>');
-    }
-    document.querySelectorAll('#sectionList .sec-card').forEach(function(card) {
-      var title = card.querySelector('.sec-title').value.trim();
-      var content = card.querySelector('.sec-editor').innerHTML.trim();
-      var style = getActiveStyle(card);
-      if (content || title) {
-        parts.push(buildSectionHtml(title, content, style));
-      }
-    });
-    return parts.join('\\n');
-  }
+function buildRawHtml() {
+  var parts = [];
+  var intro = $('customIntro').value.trim();
+  if (intro) parts.push('<p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin-bottom:25px;">'+escHtml(intro).replace(/\\n/g,'<br/>')+'</p>');
+  document.querySelectorAll('#sectionList .sec-card').forEach(function(card){
+    var title = card.querySelector('.sec-title').value.trim();
+    var content = card.querySelector('.sec-editor').innerHTML.trim();
+    var style = getActiveStyle(card);
+    if (content || title) parts.push(buildSectionHtml(title, content, style));
+  });
+  return parts.join('\\n');
+}
 
-  // Seed the editor with one section by default
-  addSection('', '', 'default');
+addSection('', '', 'default');
 
-  async function doCustomPreview() {
-    const subject = $('customSubject').value.trim();
-    const rawHtml = buildRawHtml();
-    const issueType = $('customType').value;
-    if (!subject || !rawHtml) { setStatus('customStatus', 'err', 'Subject and at least one section with content are required.'); return; }
+async function doCustomPreview() {
+  var subject = $('customSubject').value.trim();
+  var rawHtml = buildRawHtml();
+  var issueType = $('customType').value;
+  if (!subject || !rawHtml) { setStatus('customStatus','err','Subject and at least one section required.'); return; }
+  $('customPreviewBtn').disabled = true;
+  $('customPreviewBtn').textContent = 'Wrapping...';
+  setStatus('customStatus','info','Wrapping in email template...');
+  try {
+    var res = await fetch('/admin/wrap', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, subject:subject, rawHtml:rawHtml, issueType:issueType }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Wrap failed');
+    lastCustom = data;
+    $('customPreviewFrame').srcdoc = data.html;
+    $('customPreviewArea').classList.remove('hidden');
+    setStatus('customStatus','ok','Preview ready.');
+  } catch (e) { setStatus('customStatus','err','Error: '+e.message); }
+  finally { $('customPreviewBtn').disabled = false; $('customPreviewBtn').textContent = 'Preview'; }
+}
 
-    $('customPreviewBtn').disabled = true;
-    $('customPreviewBtn').textContent = '⏳ Wrapping...';
-    setStatus('customStatus', 'info', 'Wrapping in email template...');
+function showCustomSendConfirm() { $('customSendConfirm').classList.remove('hidden'); }
+function hideCustomSendConfirm() { $('customSendConfirm').classList.add('hidden'); }
 
-    try {
-      const res = await fetch('/admin/wrap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: adminSecret, subject, rawHtml, issueType }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Wrap failed');
-
-      lastCustom = data;
-      $('customPreviewFrame').srcdoc = data.html;
-      $('customPreviewArea').classList.remove('hidden');
-      setStatus('customStatus', 'ok', 'Preview ready. Saved to archive.');
-    } catch (e) {
-      setStatus('customStatus', 'err', 'Error: ' + e.message);
-    } finally {
-      $('customPreviewBtn').disabled = false;
-      $('customPreviewBtn').textContent = '👁️ Preview';
-    }
-  }
-
-  function showCustomSendConfirm() { $('customSendConfirm').classList.remove('hidden'); }
-  function hideCustomSendConfirm() { $('customSendConfirm').classList.add('hidden'); }
-
-  async function doCustomSend() {
-    if (!lastCustom) return;
-    $('customConfirmSendBtn').disabled = true;
-    $('customConfirmSendBtn').textContent = '⏳ Sending...';
-    setStatus('customSendStatus', 'info', 'Sending to all subscribers...');
-
-    try {
-      const res = await fetch('/admin/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          secret: adminSecret,
-          subject: lastCustom.subject,
-          htmlContent: lastCustom.html,
-          issueType: lastCustom.issueType,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Send failed');
-
-      setStatus('customSendStatus', 'ok', 'Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed out of ' + data.total + ' subscribers.');
-      hideCustomSendConfirm();
-      loadSubCount();
-    } catch (e) {
-      setStatus('customSendStatus', 'err', 'Error: ' + e.message);
-    } finally {
-      $('customConfirmSendBtn').disabled = false;
-      $('customConfirmSendBtn').textContent = 'Yes, Send It';
-    }
-  }
-
-  async function doSend() {
-    if (!lastGenerated) return;
-    $('confirmSendBtn').disabled = true;
-    $('confirmSendBtn').textContent = '⏳ Sending...';
-    setStatus('sendStatus', 'info', 'Sending to all subscribers...');
-
-    try {
-      const res = await fetch('/admin/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          secret: adminSecret,
-          subject: lastGenerated.subject,
-          htmlContent: lastGenerated.html,
-          issueType: lastGenerated.issueType,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Send failed');
-
-      setStatus('sendStatus', 'ok', 'Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed out of ' + data.total + ' subscribers.');
-      hideSendConfirm();
-    } catch (e) {
-      setStatus('sendStatus', 'err', 'Error: ' + e.message);
-    } finally {
-      $('confirmSendBtn').disabled = false;
-      $('confirmSendBtn').textContent = 'Yes, Send It';
-    }
-  }
+async function doCustomSend() {
+  if (!lastCustom) return;
+  $('customConfirmSendBtn').disabled = true;
+  $('customConfirmSendBtn').textContent = 'Sending...';
+  setStatus('customSendStatus','info','Sending...');
+  try {
+    var res = await fetch('/admin/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, subject: lastCustom.subject, htmlContent: lastCustom.html, issueType: lastCustom.issueType }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Send failed');
+    setStatus('customSendStatus','ok','Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed.');
+    hideCustomSendConfirm();
+    loadSubCount();
+  } catch (e) { setStatus('customSendStatus','err','Error: '+e.message); }
+  finally { $('customConfirmSendBtn').disabled = false; $('customConfirmSendBtn').textContent = 'Yes, Send It'; }
+}
 </script>
 </body>
 </html>`);
