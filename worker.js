@@ -91,6 +91,18 @@ export default {
       return handleAdminPage();
     }
 
+    if (url.pathname === '/admin/verify' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        if (!body.secret || body.secret !== env.ADMIN_SECRET) {
+          return json({ ok: false, error: 'Invalid admin secret' }, 401);
+        }
+        return json({ ok: true });
+      } catch (e) {
+        return json({ ok: false, error: 'Invalid request' }, 400);
+      }
+    }
+
     if (url.pathname === '/admin/generate' && request.method === 'POST') {
       return handleAdminGenerate(request, env);
     }
@@ -153,6 +165,14 @@ export default {
 
     if (url.pathname === '/admin/draft-regenerate' && request.method === 'POST') {
       return handleAdminDraftRegenerate(request, env);
+    }
+
+    if (url.pathname === '/admin/trigger-generate' && request.method === 'POST') {
+      return handleAdminTriggerGenerate(request, env);
+    }
+
+    if (url.pathname === '/admin/urgent-generate' && request.method === 'POST') {
+      return handleAdminUrgentGenerate(request, env);
     }
 
     if (url.pathname === '/favicon.ico') {
@@ -739,6 +759,171 @@ async function handleAdminDraftRegenerate(request, env) {
   return json({ success: true, subject: newsletter.subject, html: newsletter.html });
 }
 
+// ─── MANUAL TRIGGER: Run Stage 1 (research + generate draft) on demand ──────
+async function handleAdminTriggerGenerate(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+
+  const issueType = body.issueType || getIssueType();
+  const dateKey = new Date().toISOString().split('T')[0] + (body.suffix || '');
+
+  const existing = await getDraft(env, dateKey);
+  if (existing && !body.overwrite) {
+    return json({ error: 'A draft already exists for ' + dateKey + '. Use overwrite:true or discard it first.', existingDraft: { dateKey, subject: existing.subject, status: existing.status } }, 409);
+  }
+
+  const newsletter = await generateNewsletter(env, issueType);
+
+  const draft = {
+    dateKey,
+    issueType: newsletter.issueType,
+    subject: newsletter.subject,
+    html: newsletter.html,
+    rawHtml: newsletter.rawHtml,
+    threatIntel: newsletter.threatIntel,
+    topicTags: [],
+    status: 'pending',
+    generatedAt: newsletter.generatedAt,
+    sentAt: null,
+    qaResult: null,
+    edits: [],
+  };
+
+  await saveDraft(env, draft);
+
+  return json({
+    success: true,
+    dateKey,
+    issueType,
+    subject: newsletter.subject,
+    html: newsletter.html,
+    threatIntelSources: newsletter.threatIntel ? (newsletter.threatIntel.items || []).length : 0,
+    generatedAt: newsletter.generatedAt,
+  });
+}
+
+// ─── URGENT / TOPIC-BASED NEWSLETTER GENERATOR ─────────────────────────────
+async function handleAdminUrgentGenerate(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  if (!body.topic || !body.topic.trim()) return json({ error: 'Topic is required' }, 400);
+
+  const topic = body.topic.trim();
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  // Fetch threat intel for additional context
+  let threatIntel = null;
+  let threatIntelPrompt = '';
+  try {
+    threatIntel = await fetchThreatIntel(env);
+    threatIntelPrompt = formatThreatIntelForPrompt(threatIntel);
+  } catch (e) {
+    console.error('Threat intel fetch failed:', e.message);
+  }
+
+  const system = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech.
+Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy.
+NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
+Your tone is: urgent but calm, protective, authoritative. You're breaking an important story that your readers need to know about RIGHT NOW.
+CRITICAL: All content MUST be timely and current for ${dateStr}. This is an URGENT ALERT newsletter.`;
+
+  const htmlInstructions = `Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered.
+CALLOUT/TIP BOX STYLING RULES (critical for email readability):
+- For tip/callout boxes, use a LEFT BORDER accent style: background #1E201E (same as card bg), with a thick 4px left border in the accent color (#BCE600 for tips, #F5A623 for warnings, #E8443A for danger). Text stays #F2F5E8.
+- NEVER use bright colors (#BCE600, #F5A623) as background fill for text areas — the white text becomes unreadable in many email clients.
+- For emphasis, use the left-border style or bold colored headings inside dark boxes instead.
+DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
+DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
+IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks — just the raw HTML content starting directly with your first tag.`;
+
+  const prompt = `Today's date is ${dateStr}. Write an URGENT ALERT newsletter about this specific topic:
+
+"${topic}"
+
+${threatIntelPrompt}
+
+Research what you know about this topic and related threats. If the threat intel above contains articles related to this topic, draw heavily from those. Fill in details: who is affected, how the scam/threat works, what the warning signs are, and what readers should do RIGHT NOW.
+
+Your VERY FIRST LINE must be the email subject line in this exact format:
+SUBJECT: [alert emoji] Your urgent subject line here
+The subject MUST directly reference the specific topic. Then leave a blank line and begin the HTML body.
+
+Structure:
+1. **URGENT ALERT banner** — 1-2 sentences explaining why this matters RIGHT NOW. Make it feel immediate.
+2. **What's Happening** — 3-4 paragraphs explaining the threat/scam/issue in plain language. Include specifics: who reported it (FBI, FTC, state AG, etc.), who's being targeted, what the scam looks like, how it works.
+3. **How to Spot It** — Clear warning signs as a bulleted list. Be specific about what to look for (exact phrases scammers use, types of calls/texts, etc.)
+4. **What To Do Right Now** — Numbered action steps. Keep them simple and specific. Include who to report it to (with real phone numbers/websites if applicable like ic3.gov, FTC.gov/complaint, etc.)
+5. **If You've Already Been Affected** — What to do if it's too late (freeze credit, change passwords, contact bank, file report, etc.)
+6. **Share This Alert** — Encourage readers to forward this to family and friends who might be vulnerable. Keep it to 1-2 sentences.
+7. **Brief sign-off** from the ShieldSmart Team at XNL Tech
+
+${htmlInstructions}`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: 8000,
+      system,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error('Anthropic API error: ' + err);
+  }
+
+  const data = await response.json();
+  let rawHtml = data.content[0].text;
+  rawHtml = rawHtml.replace(/```html\s*/gi, '').replace(/```\s*/gi, '').trim();
+
+  let subject = '🚨 Urgent ShieldSmart Alert';
+  const subjectMatch = rawHtml.match(/^SUBJECT:\s*(.+)/i);
+  if (subjectMatch) {
+    subject = subjectMatch[1].trim();
+    rawHtml = rawHtml.replace(/^SUBJECT:\s*.+\n?\n?/i, '').trim();
+  }
+
+  const issueType = 'threat-radar';
+  const fullHtml = wrapInEmailShell(rawHtml, subject, issueType);
+
+  // Save as draft
+  const dateKey = today.toISOString().split('T')[0] + '-urgent-' + Date.now().toString(36);
+  const draft = {
+    dateKey,
+    issueType,
+    subject,
+    html: fullHtml,
+    rawHtml,
+    threatIntel: threatIntel ? { itemCount: threatIntel.items.length, feedStatus: threatIntel.feedStatus } : null,
+    topicTags: ['urgent', topic.toLowerCase().slice(0, 60)],
+    status: 'pending',
+    generatedAt: new Date().toISOString(),
+    sentAt: null,
+    qaResult: null,
+    edits: [],
+    urgent: true,
+    originalTopic: topic,
+  };
+
+  await saveDraft(env, draft);
+
+  return json({
+    success: true,
+    dateKey,
+    subject,
+    html: fullHtml,
+    threatIntelSources: threatIntel ? (threatIntel.items || []).length : 0,
+  });
+}
+
 // ─── SOCIAL POST GENERATOR ───────────────────────────────────────────────────
 async function handleSocialGen(request, env) {
   const body = await request.json();
@@ -943,7 +1128,11 @@ Your readers are everyday people — seniors, parents, non-tech workers — who 
 NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
 CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats and topics that are ACTIVELY relevant right now in ${today.getFullYear()}.`;
 
-  const htmlInstructions = `Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered. Make it visually engaging with colored callout boxes.
+  const htmlInstructions = `Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered. Make it visually engaging with callout boxes.
+CALLOUT/TIP BOX STYLING RULES (critical for email readability):
+- For tip/callout boxes, use a LEFT BORDER accent style: background #1E201E (same as card bg), with a thick 4px left border in the accent color (#BCE600 for tips, #F5A623 for warnings, #E8443A for danger). Text stays #F2F5E8.
+- NEVER use bright colors (#BCE600, #F5A623) as background fill for text areas — the white text becomes unreadable in many email clients.
+- For emphasis, use the left-border style or bold colored headings inside dark boxes instead.
 DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
 DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
 IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`;
@@ -2156,7 +2345,7 @@ function handleAdminPage() {
     <h2><span style="color:#fff">SHIELD</span><span style="color:#BCE600">SMART</span></h2>
     <p>Admin Dashboard</p>
     <div class="field">
-      <input type="password" id="secret" placeholder="Enter admin secret..." style="text-align:center;" />
+      <input type="password" id="secret" placeholder="Enter admin secret..." style="text-align:center;" onkeydown="if(event.key==='Enter')doLogin()" />
     </div>
     <button class="btn btn-lime" style="width:100%;justify-content:center;margin-top:8px;" onclick="doLogin()">Unlock Dashboard</button>
     <div class="status" id="loginStatus"></div>
@@ -2258,10 +2447,22 @@ function handleAdminPage() {
 
     <!-- ═══════════ DRAFT QUEUE ═══════════ -->
     <div class="tab-view" id="view-drafts">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <p style="color:#7A8070;font-size:13px;">Review, approve, or regenerate daily newsletter drafts. Drafts are auto-generated at 7 AM EST each weekday.</p>
-        <button class="btn btn-ghost btn-sm" onclick="loadDrafts()">Refresh</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:12px;flex-wrap:wrap;">
+        <p style="color:#7A8070;font-size:13px;flex:1;min-width:200px;">Review, approve, or regenerate daily newsletter drafts. Drafts are auto-generated at 7 AM EST each weekday.</p>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="triggerIssueType" style="width:auto;padding:7px 12px;font-size:12px;">
+            <option value="">Today's Type (auto)</option>
+            <option value="threat-radar">Threat Radar</option>
+            <option value="scam-spotlight">Scam Spotlight</option>
+            <option value="safety-skill">Safety Skill</option>
+            <option value="news-brief">News Brief</option>
+            <option value="fix-it">Fix-It Help Desk</option>
+          </select>
+          <button class="btn btn-lime btn-sm" id="triggerGenBtn" onclick="triggerGenerate()">Generate Draft Now</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadDrafts()">Refresh</button>
+        </div>
       </div>
+      <div class="status" id="triggerStatus"></div>
       <div id="draftList">Loading drafts...</div>
 
       <!-- Draft Preview / Edit panel -->
@@ -2295,6 +2496,41 @@ function handleAdminPage() {
 
     <!-- ═══════════ GENERATE ═══════════ -->
     <div class="tab-view" id="view-generate">
+
+      <!-- Urgent Alert Generator -->
+      <div class="card" style="border-color:#E8443A;border-width:2px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <span style="font-size:20px;">🚨</span>
+          <h3 style="color:#E8443A;font-size:16px;">Urgent Alert Generator</h3>
+        </div>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:16px;">Enter a breaking topic and the worker will research it using live threat intel feeds, then generate a full urgent-alert newsletter ready to send.</p>
+        <div class="field">
+          <label for="urgentTopic">Topic or Breaking News</label>
+          <textarea id="urgentTopic" rows="3" placeholder='e.g. "FBI warns Kentuckians of new phone scam going around"&#10;e.g. "New Gmail phishing attack bypasses 2-factor authentication"&#10;e.g. "Major data breach at [company] exposes customer info"'></textarea>
+        </div>
+        <button class="btn btn-red" id="urgentGenBtn" onclick="doUrgentGenerate()">Research &amp; Generate Urgent Alert</button>
+        <div class="status" id="urgentStatus"></div>
+        <div id="urgentPreviewArea" class="hidden" style="margin-top:16px;">
+          <p style="color:#7A8070;font-size:14px;margin-bottom:8px;" id="urgentSubject"></p>
+          <iframe class="preview-frame" id="urgentPreviewFrame" sandbox="allow-same-origin" style="height:600px;"></iframe>
+          <div class="btn-group" style="margin-top:12px;">
+            <button class="btn btn-ghost" onclick="doUrgentGenerate()">Regenerate</button>
+            <button class="btn btn-amber" onclick="showUrgentSendConfirm()">Send to All Subscribers</button>
+          </div>
+          <div class="send-confirm hidden" id="urgentSendConfirm">
+            <p>This will send this urgent alert to <strong>all active subscribers</strong>. Continue?</p>
+            <div class="btn-group">
+              <button class="btn btn-red" id="urgentConfirmSendBtn" onclick="doUrgentSend()">Yes, Send Urgent Alert</button>
+              <button class="btn btn-ghost" onclick="hideUrgentSendConfirm()">Cancel</button>
+            </div>
+          </div>
+          <div class="status" id="urgentSendStatus"></div>
+        </div>
+      </div>
+
+      <hr class="divider" />
+
+      <!-- Reader Question Generator -->
       <div class="card">
         <h3 style="margin-bottom:16px;">Generate from Reader Question</h3>
         <div class="row">
@@ -2541,9 +2777,16 @@ function switchTab(tab) {
 }
 
 // ── Login ──
-function doLogin() {
-  adminSecret = $('secret').value.trim();
-  if (!adminSecret) { setStatus('loginStatus','err','Please enter the admin secret.'); return; }
+async function doLogin() {
+  var secret = $('secret').value.trim();
+  if (!secret) { setStatus('loginStatus','err','Please enter the admin secret.'); return; }
+  setStatus('loginStatus','info','Verifying...');
+  try {
+    var res = await fetch('/admin/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: secret }) });
+    var data = await res.json();
+    if (!data.ok) { setStatus('loginStatus','err', data.error || 'Invalid admin secret.'); return; }
+  } catch (e) { setStatus('loginStatus','err','Connection error: ' + e.message); return; }
+  adminSecret = secret;
   $('loginOverlay').style.display = 'none';
   $('sidebar').style.display = 'flex';
   $('mainPanel').style.display = 'block';
@@ -2761,7 +3004,7 @@ function renderDashDrafts() {
   var el = $('dashDraftList');
   var actionable = allDrafts.filter(function(d) { return d.status === 'pending' || d.status === 'qa_passed' || d.status === 'needs_review'; });
   if (actionable.length === 0) {
-    el.innerHTML = '<div style="color:#5A6050;text-align:center;padding:24px;">No drafts awaiting review</div>';
+    el.innerHTML = '<div style="text-align:center;padding:24px;"><div style="color:#5A6050;margin-bottom:12px;">No drafts awaiting review</div><button class="btn btn-lime btn-sm" onclick="switchTab(\\'drafts\\');triggerGenerate()">Generate Draft Now</button></div>';
     return;
   }
   el.innerHTML = actionable.map(function(d) {
@@ -2777,6 +3020,27 @@ function renderDashDrafts() {
       + '<button class="btn btn-ghost btn-sm" onclick="switchTab(\\'drafts\\');openDraftPreview(\\'' + d.dateKey + '\\')">Edit</button>'
       + '</div></div>';
   }).join('');
+}
+
+async function triggerGenerate() {
+  var issueType = $('triggerIssueType') ? $('triggerIssueType').value : '';
+  $('triggerGenBtn').disabled = true;
+  $('triggerGenBtn').textContent = 'Researching & generating...';
+  setStatus('triggerStatus','info','Fetching threat intel from RSS feeds and generating newsletter with AI... this takes 30-90 seconds.');
+  try {
+    var res = await fetch('/admin/trigger-generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, issueType: issueType || undefined, overwrite: false }) });
+    var data = await res.json();
+    if (res.status === 409) {
+      if (confirm('A draft already exists for today (' + (data.existingDraft ? data.existingDraft.subject : '') + '). Overwrite it?')) {
+        var res2 = await fetch('/admin/trigger-generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, issueType: issueType || undefined, overwrite: true }) });
+        data = await res2.json();
+        if (!res2.ok) throw new Error(data.error);
+      } else { setStatus('triggerStatus','',''); $('triggerGenBtn').disabled = false; $('triggerGenBtn').textContent = 'Generate Draft Now'; return; }
+    } else if (!res.ok) { throw new Error(data.error); }
+    setStatus('triggerStatus','ok','Draft generated! Subject: "' + data.subject + '" | ' + data.threatIntelSources + ' threat intel sources used. Click the draft below to preview.');
+    loadDrafts();
+  } catch (e) { setStatus('triggerStatus','err','Generation failed: ' + e.message); }
+  finally { $('triggerGenBtn').disabled = false; $('triggerGenBtn').textContent = 'Generate Draft Now'; }
 }
 
 async function quickApprove(dateKey) {
@@ -3029,6 +3293,49 @@ function renderDashCron(logs) {
       + '<span style="color:#7A8070;font-size:12px;">' + d + '</span>'
       + '<span style="color:#F2F5E8;font-size:13px;">' + escapeHtml(l.issueType||'') + '</span></div>';
   }).join('');
+}
+
+// ── Urgent alert generator ──
+var lastUrgent = null;
+
+async function doUrgentGenerate() {
+  var topic = $('urgentTopic').value.trim();
+  if (!topic) { setStatus('urgentStatus','err','Please enter a topic or breaking news headline.'); return; }
+  $('urgentGenBtn').disabled = true;
+  $('urgentGenBtn').textContent = 'Researching & generating...';
+  setStatus('urgentStatus','info','Fetching live threat intel, researching your topic, and generating the alert... 30-90 seconds.');
+  $('urgentPreviewArea').classList.add('hidden');
+  try {
+    var res = await fetch('/admin/urgent-generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, topic: topic }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Generation failed');
+    lastUrgent = data;
+    $('urgentSubject').textContent = 'Subject: ' + data.subject;
+    $('urgentPreviewFrame').srcdoc = data.html;
+    $('urgentPreviewArea').classList.remove('hidden');
+    setStatus('urgentStatus','ok','Urgent alert generated! ' + data.threatIntelSources + ' threat intel sources used. Preview below or find it in the Draft Queue.');
+    loadDrafts();
+  } catch (e) { setStatus('urgentStatus','err','Error: ' + e.message); }
+  finally { $('urgentGenBtn').disabled = false; $('urgentGenBtn').textContent = 'Research & Generate Urgent Alert'; }
+}
+
+function showUrgentSendConfirm() { $('urgentSendConfirm').classList.remove('hidden'); }
+function hideUrgentSendConfirm() { $('urgentSendConfirm').classList.add('hidden'); }
+
+async function doUrgentSend() {
+  if (!lastUrgent) return;
+  $('urgentConfirmSendBtn').disabled = true;
+  $('urgentConfirmSendBtn').textContent = 'Sending...';
+  setStatus('urgentSendStatus','info','Sending urgent alert to all subscribers...');
+  try {
+    var res = await fetch('/admin/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, subject: lastUrgent.subject, htmlContent: lastUrgent.html, issueType: 'threat-radar' }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Send failed');
+    setStatus('urgentSendStatus','ok','Urgent alert sent! ' + data.sent + ' delivered, ' + data.failed + ' failed.');
+    hideUrgentSendConfirm();
+    loadSubCount();
+  } catch (e) { setStatus('urgentSendStatus','err','Error: ' + e.message); }
+  finally { $('urgentConfirmSendBtn').disabled = false; $('urgentConfirmSendBtn').textContent = 'Yes, Send Urgent Alert'; }
 }
 
 // ── Generate newsletter ──
