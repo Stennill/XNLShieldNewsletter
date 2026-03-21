@@ -10,10 +10,12 @@ routes = [
   { pattern = "www.xnltech.com/*", zone_name = "xnltech.com" }
 ]
 
-# ─── CRON SCHEDULE ──────────────────────────────────────────────────────────
-# Fires at 11:00 AM UTC (7:00 AM EDT) on Monday, Wednesday, Friday
+# ─── CRON SCHEDULE (3-stage pipeline, weekdays only) ───────────────────────
+# Stage 1: 11:00 UTC (7am EST) — Generate draft
+# Stage 2: 12:00 UTC (8am EST) — QA check, auto-send if clean, flag for review if issues
+# Stage 3: 15:00 UTC (10am EST) — Deadline: auto-fix and send any remaining drafts
 [triggers]
-crons = ["0 11 * * 1", "0 11 * * 3", "0 11 * * 5"]
+crons = ["0 11 * * 1-5", "0 12 * * 1-5", "0 15 * * 1-5"]
 
 # ─── KV NAMESPACES ──────────────────────────────────────────────────────────
 [[kv_namespaces]]
@@ -29,3 +31,9 @@ id = "fa3ad0e4834a4f6fbc11a3960c264eef"
 #   npx wrangler secret put ADMIN_SECRET
 #   npx wrangler secret put SEND_API_KEY
 #   npx wrangler secret put SEND_FROM
+#
+# Optional: X (Twitter) auto-posting (from developer.x.com)
+#   npx wrangler secret put X_API_KEY
+#   npx wrangler secret put X_API_SECRET
+#   npx wrangler secret put X_ACCESS_TOKEN
+#   npx wrangler secret put X_ACCESS_SECRET

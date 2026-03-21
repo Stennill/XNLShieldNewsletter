@@ -127,6 +127,30 @@ export default {
       return handleAdminDeleteIssue(request, env);
     }
 
+    if (url.pathname === '/admin/drafts' && request.method === 'POST') {
+      return handleAdminDrafts(request, env);
+    }
+
+    if (url.pathname === '/admin/draft-preview' && request.method === 'POST') {
+      return handleAdminDraftPreview(request, env);
+    }
+
+    if (url.pathname === '/admin/draft-edit' && request.method === 'POST') {
+      return handleAdminDraftEdit(request, env);
+    }
+
+    if (url.pathname === '/admin/draft-approve' && request.method === 'POST') {
+      return handleAdminDraftApprove(request, env);
+    }
+
+    if (url.pathname === '/admin/draft-discard' && request.method === 'POST') {
+      return handleAdminDraftDiscard(request, env);
+    }
+
+    if (url.pathname === '/admin/draft-regenerate' && request.method === 'POST') {
+      return handleAdminDraftRegenerate(request, env);
+    }
+
     if (url.pathname === '/favicon.ico') {
       return Response.redirect(new URL('/logo.png', request.url).href, 301);
     }
@@ -142,38 +166,225 @@ export default {
     return json({ error: 'Not found' }, 404);
   },
 
-  // ─── CRON TRIGGER ─────────────────────────────────────────────────────────
-  // In wrangler.toml, add:
-  //   [triggers]
-  //   crons = ["0 11 * * 1", "0 11 * * 3", "0 11 * * 5"]
-  //   (11am UTC / 7am EDT Mon, Wed, Fri)
+  // ─── CRON TRIGGER (3-stage pipeline) ──────────────────────────────────────
+  // Stage 1: 11:00 UTC (7am EST) — Generate draft
+  // Stage 2: 12:00 UTC (8am EST) — QA check, auto-send or flag
+  // Stage 3: 15:00 UTC (10am EST) — Deadline: auto-fix and send remaining
   async scheduled(event, env, ctx) {
     const ts = new Date().toISOString();
-    const issueType = getIssueType();
-    const log = { event: 'cron', issueType, firedAt: ts, status: 'started' };
-    console.log('Cron triggered:', ts, issueType);
+    const hour = new Date(event.scheduledTime).getUTCHours();
+    const log = { event: 'cron', firedAt: ts, hour, status: 'started' };
 
     try {
-      const newsletter = await generateNewsletter(env, issueType);
-      log.subject = newsletter.subject;
-      log.status = 'generated';
-      console.log('Newsletter generated:', newsletter.subject);
+      if (hour === 11) {
+        // ── STAGE 1: Generate Draft ──
+        log.stage = 'generate';
+        const issueType = getIssueType();
+        log.issueType = issueType;
+        console.log('Stage 1: Generating draft for', issueType);
 
-      const result = await sendToAllSubscribers(newsletter, env);
-      log.sent = result.sent;
-      log.failed = result.failed;
-      log.status = 'sent';
-      console.log('Newsletter sent:', result.sent, 'delivered,', result.failed, 'failed');
+        const newsletter = await generateNewsletter(env, issueType);
+        const dateKey = new Date().toISOString().split('T')[0];
+
+        const draft = {
+          dateKey,
+          issueType: newsletter.issueType,
+          subject: newsletter.subject,
+          html: newsletter.html,
+          rawHtml: newsletter.rawHtml,
+          threatIntel: newsletter.threatIntel,
+          topicTags: [],
+          status: 'pending',
+          generatedAt: newsletter.generatedAt,
+          sentAt: null,
+          qaResult: null,
+          edits: [],
+        };
+
+        await saveDraft(env, draft);
+        log.subject = newsletter.subject;
+        log.status = 'draft_saved';
+        console.log('Draft saved:', newsletter.subject);
+
+      } else if (hour === 12) {
+        // ── STAGE 2: Automated QA ──
+        log.stage = 'qa';
+        console.log('Stage 2: Running QA on pending drafts');
+
+        const drafts = await listDrafts(env);
+        const pending = drafts.filter(d => d.status === 'pending');
+
+        if (pending.length === 0) {
+          log.status = 'no_pending_drafts';
+          console.log('No pending drafts to QA');
+        }
+
+        for (const draft of pending) {
+          const programmaticResult = runProgrammaticQA(draft);
+          let claudeResult = { pass: true, issues: [], severity: 'none', topicTags: [], summary: 'Skipped' };
+
+          if (programmaticResult.severity !== 'major') {
+            try {
+              claudeResult = await runClaudeQA(draft, env);
+            } catch (e) {
+              console.error('Claude QA failed:', e.message);
+              claudeResult = { pass: false, severity: 'major', issues: [{ type: 'structure', description: 'QA API call failed: ' + e.message }], topicTags: [], summary: 'QA error' };
+            }
+          }
+
+          const allIssues = [...programmaticResult.issues, ...(claudeResult.issues || [])];
+          const hasMajor = allIssues.some(i => i.severity === 'major' || i.type === 'factual');
+          const combinedSeverity = hasMajor ? 'major' : allIssues.length > 0 ? 'minor' : 'none';
+          const topicTags = claudeResult.topicTags || [];
+
+          const qaResult = {
+            pass: combinedSeverity !== 'major',
+            issues: allIssues,
+            severity: combinedSeverity,
+            autoFixed: false,
+            checkedAt: new Date().toISOString(),
+            summary: claudeResult.summary || programmaticResult.issues.map(i => i.issue).join('; '),
+          };
+
+          if (combinedSeverity === 'none' || (combinedSeverity === 'minor' && allIssues.length <= 2)) {
+            // Auto-fix minor issues if any, then approve + send
+            let finalHtml = draft.html;
+            if (combinedSeverity === 'minor') {
+              try {
+                finalHtml = await autoFixDraft(draft, qaResult, env);
+                qaResult.autoFixed = true;
+              } catch (e) {
+                console.error('Auto-fix failed, sending original:', e.message);
+              }
+            }
+
+            const newsletter = { subject: draft.subject, html: finalHtml, rawHtml: draft.rawHtml, issueType: draft.issueType, generatedAt: draft.generatedAt };
+            const sendResult = await sendToAllSubscribers(newsletter, env);
+            await archiveNewsletter(newsletter, topicTags, env);
+
+            await updateDraft(env, draft.dateKey, {
+              status: 'sent',
+              html: finalHtml,
+              sentAt: new Date().toISOString(),
+              qaResult,
+              topicTags,
+            });
+
+            log.status = 'sent';
+            log.subject = draft.subject;
+            log.sent = sendResult.sent;
+            log.failed = sendResult.failed;
+
+            await runPostSendPipeline(newsletter, sendResult, qaResult.autoFixed ? 'Auto-approved by QA (minor fixes applied)' : 'Auto-approved by QA (clean)', qaResult, env);
+
+          } else {
+            // Major issues — flag for review, email admin
+            await updateDraft(env, draft.dateKey, {
+              status: 'needs_review',
+              qaResult,
+              topicTags,
+            });
+
+            log.status = 'needs_review';
+            log.subject = draft.subject;
+
+            // Send review notification email
+            const issuesSummary = allIssues.map(i => `• ${i.description || i.issue}`).join('\n');
+            const notifyHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#111311;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#111311"><tr><td align="center" style="padding:24px;">
+<table width="600" cellpadding="0" cellspacing="0" bgcolor="#1E201E" style="max-width:600px;width:100%;border-radius:12px;">
+  <tr><td style="padding:24px;border-bottom:2px solid #E8443A;">
+    <div style="font-size:20px;font-weight:800;color:#FFF;">SHIELD<span style="color:#BCE600;">SMART</span> <span style="font-size:12px;color:#E8443A;font-weight:700;">DRAFT NEEDS REVIEW</span></div>
+  </td></tr>
+  <tr><td style="padding:20px 24px;">
+    <div style="color:#F2F5E8;font-size:16px;font-weight:700;margin-bottom:8px;">Subject: ${draft.subject}</div>
+    <div style="color:#7A8070;font-size:13px;margin-bottom:16px;">Issue Type: ${draft.issueType} | Date: ${draft.dateKey}</div>
+    <div style="background:#2B1A1A;border:1px solid #E8443A44;border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="color:#E8443A;font-size:13px;font-weight:700;margin-bottom:8px;">QA ISSUES FOUND:</div>
+      <div style="color:#F2F5E8;font-size:14px;white-space:pre-wrap;">${issuesSummary}</div>
+    </div>
+    <div style="color:#F5A623;font-size:14px;margin-bottom:16px;">You have until <strong>10:00 AM EST</strong> to review. After that, Claude will auto-fix and send.</div>
+    <a href="https://xnltech.com/admin" style="display:inline-block;background:#BCE600;color:#111311;padding:10px 24px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">Review in Admin Panel</a>
+  </td></tr>
+</table></td></tr></table></body></html>`;
+
+            try {
+              await sendEmail({ email: 'help@xnltech.com' }, notifyHtml, `⚠️ ShieldSmart Draft Needs Review: "${draft.subject}"`, env);
+            } catch (e) {
+              console.error('Review notification email failed:', e.message);
+            }
+          }
+        }
+
+      } else if (hour === 15) {
+        // ── STAGE 3: Auto-Fix Deadline ──
+        log.stage = 'deadline';
+        console.log('Stage 3: Checking for unreviewed drafts');
+
+        const drafts = await listDrafts(env);
+        const needsReview = drafts.filter(d => d.status === 'needs_review');
+
+        if (needsReview.length === 0) {
+          log.status = 'no_action_needed';
+          console.log('No drafts need auto-fixing');
+        }
+
+        for (const draft of needsReview) {
+          console.log('Auto-fixing draft:', draft.subject);
+
+          let fixedHtml = draft.html;
+          try {
+            fixedHtml = await autoFixDraft(draft, draft.qaResult || { issues: [] }, env);
+          } catch (e) {
+            console.error('Auto-fix failed at deadline, sending original:', e.message);
+          }
+
+          const newsletter = { subject: draft.subject, html: fixedHtml, rawHtml: draft.rawHtml, issueType: draft.issueType, generatedAt: draft.generatedAt };
+          const sendResult = await sendToAllSubscribers(newsletter, env);
+          await archiveNewsletter(newsletter, draft.topicTags || [], env);
+
+          const updatedQa = draft.qaResult || {};
+          updatedQa.autoFixed = true;
+
+          await updateDraft(env, draft.dateKey, {
+            status: 'auto_fixed',
+            html: fixedHtml,
+            sentAt: new Date().toISOString(),
+            qaResult: updatedQa,
+          });
+
+          log.status = 'auto_fixed_and_sent';
+          log.subject = draft.subject;
+          log.sent = sendResult.sent;
+          log.failed = sendResult.failed;
+
+          await runPostSendPipeline(newsletter, sendResult, 'Auto-fixed at deadline (10am EST)', updatedQa, env);
+        }
+
+        // Expire old drafts (> 7 days) that were never sent
+        try {
+          const allDrafts = await listDrafts(env);
+          const sevenDaysAgo = Date.now() - 7 * 86400000;
+          for (const d of allDrafts) {
+            if ((d.status === 'pending' || d.status === 'needs_review') && d.generatedAt) {
+              const age = Date.now() - new Date(d.generatedAt).getTime();
+              if (age > 7 * 86400000) {
+                await updateDraft(env, d.dateKey, { status: 'expired' });
+              }
+            }
+          }
+        } catch (_) {}
+      }
     } catch (e) {
       log.status = 'error';
       log.error = e.message;
       console.error('Cron error:', e.message, e.stack);
     }
 
-    // Persist cron log to KV so we can check it later
     try {
       await env.CONTENT.put(`cron:${ts}`, JSON.stringify(log));
-    } catch (_) { /* best effort */ }
+    } catch (_) {}
   },
 };
 
@@ -422,6 +633,93 @@ async function handleAdminDeleteIssue(request, env) {
   return json({ success: true, deleted: id });
 }
 
+// ─── ADMIN DRAFT HANDLERS ─────────────────────────────────────────────────────
+async function handleAdminDrafts(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  const drafts = await listDrafts(env);
+  return json({ drafts: drafts.map(d => ({ dateKey: d.dateKey, issueType: d.issueType, subject: d.subject, status: d.status, generatedAt: d.generatedAt, sentAt: d.sentAt, qaResult: d.qaResult ? { pass: d.qaResult.pass, severity: d.qaResult.severity, summary: d.qaResult.summary, autoFixed: d.qaResult.autoFixed, issueCount: (d.qaResult.issues || []).length } : null })) });
+}
+
+async function handleAdminDraftPreview(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  const draft = await getDraft(env, body.dateKey);
+  if (!draft) return json({ error: 'Draft not found' }, 404);
+  return json({ draft });
+}
+
+async function handleAdminDraftEdit(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  const draft = await getDraft(env, body.dateKey);
+  if (!draft) return json({ error: 'Draft not found' }, 404);
+
+  const edits = draft.edits || [];
+  if (body.subject && body.subject !== draft.subject) {
+    edits.push({ editedAt: new Date().toISOString(), field: 'subject', oldValue: draft.subject });
+  }
+  if (body.html && body.html !== draft.html) {
+    edits.push({ editedAt: new Date().toISOString(), field: 'html', oldValue: '(changed)' });
+  }
+
+  const updates = { edits };
+  if (body.subject) updates.subject = body.subject;
+  if (body.html) {
+    updates.html = body.html;
+    updates.rawHtml = body.html;
+  }
+
+  const updated = await updateDraft(env, body.dateKey, updates);
+  return json({ success: true, draft: updated });
+}
+
+async function handleAdminDraftApprove(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  const draft = await getDraft(env, body.dateKey);
+  if (!draft) return json({ error: 'Draft not found' }, 404);
+  if (draft.status === 'sent') return json({ error: 'Already sent' }, 400);
+
+  const newsletter = { subject: draft.subject, html: draft.html, rawHtml: draft.rawHtml, issueType: draft.issueType, generatedAt: draft.generatedAt };
+  const sendResult = await sendToAllSubscribers(newsletter, env);
+  await archiveNewsletter(newsletter, draft.topicTags || [], env);
+  await updateDraft(env, body.dateKey, { status: 'sent', sentAt: new Date().toISOString() });
+
+  await runPostSendPipeline(newsletter, sendResult, 'Manually approved by admin', draft.qaResult, env);
+
+  return json({ success: true, sent: sendResult.sent, failed: sendResult.failed, total: sendResult.total });
+}
+
+async function handleAdminDraftDiscard(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  await updateDraft(env, body.dateKey, { status: 'discarded' });
+  return json({ success: true });
+}
+
+async function handleAdminDraftRegenerate(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) return json({ error: 'Unauthorized' }, 401);
+  const draft = await getDraft(env, body.dateKey);
+  if (!draft) return json({ error: 'Draft not found' }, 404);
+
+  const newsletter = await generateNewsletter(env, draft.issueType);
+  const updates = {
+    subject: newsletter.subject,
+    html: newsletter.html,
+    rawHtml: newsletter.rawHtml,
+    threatIntel: newsletter.threatIntel,
+    status: 'pending',
+    generatedAt: newsletter.generatedAt,
+    qaResult: null,
+    edits: [...(draft.edits || []), { editedAt: new Date().toISOString(), field: 'regenerated', oldValue: draft.subject }],
+  };
+
+  const updated = await updateDraft(env, body.dateKey, updates);
+  return json({ success: true, subject: newsletter.subject, html: newsletter.html });
+}
+
 // ─── SOCIAL POST GENERATOR ───────────────────────────────────────────────────
 async function handleSocialGen(request, env) {
   const body = await request.json();
@@ -461,7 +759,7 @@ async function handleSocialGen(request, env) {
     body: JSON.stringify({
       model: 'claude-opus-4-5',
       max_tokens: 2000,
-      system: `You write social media posts for ShieldSmart, a free cyber safety newsletter by XNL Tech. The newsletter delivers plain-English security tips 3x a week (Mon/Wed/Fri). The goal of every post is to get people to subscribe at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
+      system: `You write social media posts for ShieldSmart, a free cyber safety newsletter by XNL Tech. The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to subscribe at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
       messages: [{ role: 'user', content: `Generate social media posts to promote the ShieldSmart newsletter and drive subscriptions.
 
 ${topicInstruction}${recentIssues}
@@ -564,7 +862,7 @@ IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \
   let rawHtml = data.content[0].text;
   rawHtml = rawHtml.replace(/```html\s*/gi, '').replace(/```\s*/gi, '').trim();
 
-  let subject = generateSubject('friday');
+  let subject = generateSubject('fix-it');
   const subjectMatch = rawHtml.match(/^SUBJECT:\s*(.+)/i);
   if (subjectMatch) {
     subject = subjectMatch[1].trim();
@@ -576,38 +874,25 @@ IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \
   const newsletter = {
     subject,
     html: fullHtml,
+    rawHtml,
     issueType,
     generatedAt: new Date().toISOString(),
   };
 
-  try {
-    const ds = new Date().toISOString().split('T')[0];
-    const suffix = Date.now().toString(36);
-    const archiveKey = `issue:${ds}-${issueType}-${suffix}`;
-    const meta = {
-      id: archiveKey,
-      subject: newsletter.subject,
-      issueType: newsletter.issueType,
-      generatedAt: newsletter.generatedAt,
-      dateStr: ds,
-    };
-    await env.CONTENT.put(archiveKey, fullHtml);
-    await env.CONTENT.put(`${archiveKey}:body`, rawHtml);
-    await env.CONTENT.put(`${archiveKey}:meta`, JSON.stringify(meta));
-  } catch (e) {
-    console.error('Failed to save to archive:', e.message);
-  }
+  await archiveNewsletter(newsletter, [], env);
 
   return newsletter;
 }
 
 // ─── ISSUE TYPE LOGIC ────────────────────────────────────────────────────────
 function getIssueType() {
-  const day = new Date().getDay(); // 0=Sun, 1=Mon, 3=Wed, 5=Fri
-  if (day === 1) return 'monday';
-  if (day === 3) return 'wednesday';
-  if (day === 5) return 'friday';
-  return 'monday'; // default
+  const day = new Date().getDay(); // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+  if (day === 1) return 'threat-radar';
+  if (day === 2) return 'scam-spotlight';
+  if (day === 3) return 'safety-skill';
+  if (day === 4) return 'news-brief';
+  if (day === 5) return 'fix-it';
+  return 'threat-radar'; // default fallback for weekends (shouldn't trigger)
 }
 
 // ─── GENERATE WITH ANTHROPIC ─────────────────────────────────────────────────
@@ -615,120 +900,148 @@ async function generateNewsletter(env, issueType) {
   const today = new Date();
   const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  // Fetch recent issue subjects to avoid repeating topics
-  let recentTopics = '';
+  // Fetch real-time threat intelligence from RSS feeds
+  let threatIntel = null;
+  let threatIntelPrompt = '';
   try {
-    const list = await env.CONTENT.list({ prefix: 'issue:' });
-    const metaKeys = list.keys
-      .filter(k => k.name.endsWith(':meta'))
-      .sort((a, b) => b.name.localeCompare(a.name))
-      .slice(0, 12);
-    const subjects = [];
-    for (const key of metaKeys) {
-      const val = await env.CONTENT.get(key.name);
-      if (val) {
-        const meta = JSON.parse(val);
-        subjects.push(meta.subject);
-      }
-    }
-    if (subjects.length > 0) {
-      recentTopics = `\n\nIMPORTANT — DO NOT repeat these topics already covered in recent issues:\n${subjects.map(s => `- ${s}`).join('\n')}\nChoose a COMPLETELY DIFFERENT topic that has NOT been covered above.`;
-    }
-  } catch(e) { /* continue without recent topics */ }
+    threatIntel = await fetchThreatIntel(env);
+    threatIntelPrompt = formatThreatIntelForPrompt(threatIntel);
+  } catch (e) {
+    console.error('Threat intel fetch failed:', e.message);
+  }
+
+  // Enhanced topic deduplication (30 issues + pending drafts + topic tags)
+  let dedupPrompt = '';
+  try {
+    const recentTopics = await getRecentTopicsForDedup(env);
+    dedupPrompt = formatDedupForPrompt(recentTopics);
+  } catch (e) {
+    console.error('Dedup fetch failed:', e.message);
+  }
+
+  const baseSystem = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
+Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy. 
+NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
+CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats and topics that are ACTIVELY relevant right now in ${today.getFullYear()}.`;
+
+  const htmlInstructions = `Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered. Make it visually engaging with colored callout boxes.
+DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
+DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
+IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`;
 
   const prompts = {
-    monday: {
-      fallbackSubject: generateSubject('monday'),
-      system: `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
-Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy. 
-Your tone is: warm, protective, like a knowledgeable friend who happens to work in cybersecurity.
-NEVER use jargon without immediately explaining it in plain English.
-Write as if you're talking to your mom or grandparent.
-CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats that are ACTIVELY circulating right now in ${today.getFullYear()}. Include specific, realistic details — which platforms are affected, what the scam messages look like, and any recent warnings from the FTC, FBI, or cybersecurity agencies. Never write generic or outdated content.`,
-      prompt: `Today's date is ${dateStr}. Write a Monday "Threat Radar" newsletter issue. 
+    'threat-radar': {
+      fallbackSubject: generateSubject('threat-radar'),
+      system: baseSystem + `\nYour tone is: warm, protective, like a knowledgeable friend who happens to work in cybersecurity. Include specific, realistic details — which platforms are affected, what the scam messages look like, and any recent warnings from the FTC, FBI, or cybersecurity agencies.`,
+      prompt: `Today's date is ${dateStr}. Write a Monday "Threat Radar" newsletter issue.
 
 IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact format:
 SUBJECT: [emoji] Your catchy subject line here
 The subject MUST directly reference the specific threat covered in the issue. Then leave a blank line and begin the HTML body.
-
-Pick from a WIDE variety of real threats — examples include (but don't limit yourself to): fake delivery texts, AI voice cloning scams, QR code phishing, fake tech support popups, romance scams, cryptocurrency fraud, fake job offers, grandparent scams, SIM swapping, malicious browser extensions, fake Wi-Fi hotspots, social media impersonation, fake charity scams, smishing attacks, deepfake video fraud, parking meter QR scams, fake app store apps, USB drop attacks, business email compromise, fake invoice scams. Always pick something DIFFERENT from recent issues.${recentTopics}
+${threatIntelPrompt}${dedupPrompt}
 
 Structure:
 1. **Friendly opener** (2-3 sentences, warm, urgent but not scary)
-2. **This Week's Threat** — Pick one very real, current scam or hacking tactic. Name it clearly. (e.g., "The Fake Bank Text Scam")
+2. **This Week's Threat** — Pick one very real, current scam or hacking tactic from the threat intel above. Name it clearly.
 3. **How It Works** — Explain it step by step like a story. What happens? What do they want? (3-4 paragraphs, PLAIN English)
 4. **How To Spot It** — 3-5 clear bullet points with specific, concrete signs
 5. **What To Do If You Get One** — Numbered action steps (keep it simple: 3-4 steps)
 6. **Quick Win** — One 30-second thing they can do RIGHT NOW to be safer
 7. **Closing** — Warm, encouraging sign-off from "The ShieldSmart Team at XNL Tech"
 
-Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered. Make it visually engaging with colored callout boxes.
-DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the friendly opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`,
+${htmlInstructions}`,
     },
-    wednesday: {
-      fallbackSubject: generateSubject('wednesday'),
-      system: `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
-Your readers are everyday people who are NOT tech savvy. 
-Tone: encouraging, simple, like a patient teacher. Make people feel CAPABLE, not overwhelmed.
-CRITICAL: All content MUST be timely and current for ${dateStr}. Reference current software versions, real app interfaces, and up-to-date settings paths for ${today.getFullYear()}. If a feature has been updated recently, mention the latest version. Never reference outdated menus or deprecated features.`,
+    'scam-spotlight': {
+      fallbackSubject: generateSubject('scam-spotlight'),
+      system: baseSystem + `\nYour tone is: investigative but accessible, like a reporter explaining a scam to a friend over coffee. You break down exactly how the scam works, who's behind it, and what makes people fall for it.`,
+      prompt: `Today's date is ${dateStr}. Write a Tuesday "Scam Spotlight" newsletter issue — a deep dive into one specific active scam.
+
+IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact format:
+SUBJECT: [emoji] Your catchy subject line here
+The subject MUST directly reference the specific scam covered. Then leave a blank line and begin the HTML body.
+${threatIntelPrompt}${dedupPrompt}
+
+Structure:
+1. **Hook opener** (2 sentences — grab attention with the scale or impact of this scam)
+2. **The Scam** — Name it clearly and explain what it is in one paragraph
+3. **The Setup** — How do scammers reach you? (text, email, phone call, social media ad?) Include actual examples of what the messages look like
+4. **The Trap** — What makes this scam convincing? Why do smart people fall for it? (2-3 paragraphs)
+5. **The Damage** — What happens if you fall for it? Real consequences (money lost, identity stolen, etc.)
+6. **Your Defense** — 4-5 specific, actionable steps to protect yourself
+7. **Who To Report It To** — Specific agencies and websites (FTC, FBI IC3, etc.)
+8. **Closing** — Empowering sign-off from "The ShieldSmart Team at XNL Tech"
+
+${htmlInstructions}`,
+    },
+    'safety-skill': {
+      fallbackSubject: generateSubject('safety-skill'),
+      system: baseSystem + `\nTone: encouraging, simple, like a patient teacher. Make people feel CAPABLE, not overwhelmed. Reference current software versions, real app interfaces, and up-to-date settings paths for ${today.getFullYear()}.`,
       prompt: `Today's date is ${dateStr}. Write a Wednesday "Safety Skill" newsletter issue.
 
 IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact format:
 SUBJECT: [emoji] Your catchy subject line here
-The subject MUST directly reference the specific skill taught in the issue. Then leave a blank line and begin the HTML body.
-
-Pick from a WIDE variety of safety skills — examples include (but don't limit yourself to): setting up two-factor authentication, creating strong passwords, using a password manager, checking app permissions, spotting phishing emails, securing home Wi-Fi, enabling automatic updates, backing up your phone, reviewing privacy settings on Facebook/Instagram, recognizing fake websites, setting up Find My Phone, creating a PIN for your SIM card, encrypting your phone, clearing saved passwords from browsers, checking for data breaches, setting up login alerts, using a VPN on public Wi-Fi, reviewing connected apps, enabling biometric login, setting up email filters. Always pick something DIFFERENT from recent issues.${recentTopics}
+The subject MUST directly reference the specific skill taught. Then leave a blank line and begin the HTML body.
+${threatIntelPrompt}${dedupPrompt}
 
 Structure:
 1. **Opener** — "This Wednesday, we're building one simple habit" (2 sentences)
 2. **The Skill** — ONE specific security habit or setting. Give it a plain-language name.
-3. **Why It Matters** — A brief real-world story or example showing what happens without this skill (2 paragraphs)
+3. **Why It Matters** — A brief real-world story or example showing what happens without this skill (2 paragraphs). Reference current threats from the intel if relevant.
 4. **How To Do It** — Step-by-step instructions with numbered steps. Write as if guiding someone by phone. Specify: iPhone vs Android or Windows vs Mac where relevant.
 5. **You Did It!** — Brief celebration + what this skill protects them from
 6. **Closing** from the ShieldSmart Team at XNL Tech
 
-Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, muted text #7A8070. Max-width 900px. Include a visible "Steps" section with numbered boxes.
-DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`,
+${htmlInstructions}`,
     },
-    friday: {
-      fallbackSubject: generateSubject('friday'),
-      system: `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
-Your readers are everyday people who are NOT tech savvy. 
-Tone: helpful, practical, like your patient tech-savvy nephew or niece.
-CRITICAL: All content MUST be timely and current for ${dateStr}. Reference current OS versions (Windows 11, macOS Sonoma/Sequoia, iOS 18, Android 15), real software interfaces, and up-to-date solutions for ${today.getFullYear()}. Mention specific current scams in the scam alert section. Never give outdated advice or reference old software versions.`,
+    'news-brief': {
+      fallbackSubject: generateSubject('news-brief'),
+      system: baseSystem + `\nTone: concise, informative, like a trusted news anchor who simplifies complex stories. Keep each item brief but impactful. Your goal is to make readers feel informed without overwhelming them.`,
+      prompt: `Today's date is ${dateStr}. Write a Thursday "News Brief" newsletter issue — a quick-hit digest of this week's cybersecurity news that matters to everyday people.
+
+IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact format:
+SUBJECT: [emoji] Your catchy subject line here
+The subject should capture the most important story. Then leave a blank line and begin the HTML body.
+${threatIntelPrompt}${dedupPrompt}
+
+Structure:
+1. **Opener** (1-2 sentences — "Here's your Thursday security briefing")
+2. **Top Story** — The biggest cybersecurity news item this week, explained in 2-3 short paragraphs. Use the threat intel above.
+3. **Quick Hits** — 3-4 additional news items, each in 2-3 sentences with a bold headline. Cover different topics (data breach, new scam, software update, policy change, etc.)
+4. **What This Means For You** — 2-3 bullet points translating the news into actionable takeaways for non-tech readers
+5. **One Thing To Do Today** — A single, simple action inspired by this week's news
+6. **Closing** from the ShieldSmart Team at XNL Tech
+
+${htmlInstructions}`,
+    },
+    'fix-it': {
+      fallbackSubject: generateSubject('fix-it'),
+      system: baseSystem + `\nTone: helpful, practical, like your patient tech-savvy nephew or niece. Reference current OS versions (Windows 11, macOS Sonoma/Sequoia, iOS 18, Android 15) and up-to-date solutions for ${today.getFullYear()}.`,
       prompt: `Today's date is ${dateStr}. Write a Friday "Fix-It Help Desk" newsletter issue.
 
 IMPORTANT: Your VERY FIRST LINE must be the email subject line in this exact format:
 SUBJECT: [emoji] Your catchy subject line here
-The subject MUST directly reference the specific question or fix covered in the issue. Then leave a blank line and begin the HTML body.
-
-Pick from a WIDE variety of real reader-style questions — examples include (but don't limit yourself to): slow computer fix, too many browser tabs, phone storage full, printer won't connect, suspicious email received, forgot password recovery, phone battery draining fast, computer won't start, weird pop-ups appearing, email got hacked, too many spam calls, Wi-Fi keeps disconnecting, computer fan running loud, accidentally clicked a bad link, how to transfer photos, screen frozen, Bluetooth won't pair, mystery charges on phone bill, apps crashing constantly, how to clear cookies. Always pick something DIFFERENT from recent issues.${recentTopics}
+The subject MUST directly reference the specific question or fix. Then leave a blank line and begin the HTML body.
+${threatIntelPrompt}${dedupPrompt}
 
 Structure:
 1. **Happy Friday opener** (2 sentences — light and friendly)
-2. **This Week's Topic** — Introduce a common tech problem or frustration that many people deal with (e.g., "Wi-Fi keeps dropping", "Phone storage is full"). Frame it naturally without pretending a specific person asked it.
+2. **This Week's Topic** — Introduce a common tech problem or frustration that many people deal with. Frame it naturally.
 3. **The Fix** — Step-by-step solution in plain language. Use numbered steps. Cover both Windows and Mac if relevant. (5-8 steps)
 4. **Bonus Tip** — One related quick tip that makes their digital life easier or safer
-5. **Scam Alert Reminder** — One sentence reminder about the most common scam circulating this week
+5. **Scam Alert Reminder** — One sentence about a current scam from the threat intel
 6. **Weekend Safety Reminder** — One quick safety reminder for the weekend
 7. **Warm Friday sign-off** from the ShieldSmart Team at XNL Tech
 
-Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, muted text #7A8070. Max-width 900px. Include a visible Q&A styled section.
-DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the Friday opener).
-DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
-IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`,
+${htmlInstructions}`,
     },
   };
 
-  // TODO: Future paid subscription feature — add a "Reader Question Box" back to the
-  // Friday prompt with a CTA button for paid subscribers to get personalized help.
-  // Could include a "Get Help" button linking to a paid subscription/support tier.
+  // Legacy aliases for backward compatibility
+  if (issueType === 'monday') issueType = 'threat-radar';
+  if (issueType === 'wednesday') issueType = 'safety-skill';
+  if (issueType === 'friday') issueType = 'fix-it';
 
-  const config = prompts[issueType] || prompts.monday;
+  const config = prompts[issueType] || prompts['threat-radar'];
 
   // Call Anthropic API
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -779,36 +1092,46 @@ IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \
   const newsletter = {
     subject,
     html: fullHtml,
+    rawHtml,
     issueType,
     generatedAt: new Date().toISOString(),
+    threatIntel: threatIntel ? { itemCount: threatIntel.items.length, feedStatus: threatIntel.feedStatus } : null,
   };
 
-  // ── Save to archive in KV ──
+  return newsletter;
+}
+
+// ─── ARCHIVE NEWSLETTER ──────────────────────────────────────────────────────
+async function archiveNewsletter(newsletter, topicTags, env) {
   try {
-    const dateStr = new Date().toISOString().split('T')[0]; // e.g. 2026-03-14
+    const dateStr = new Date().toISOString().split('T')[0];
     const suffix = Date.now().toString(36);
-    const archiveKey = `issue:${dateStr}-${issueType}-${suffix}`;
+    const archiveKey = `issue:${dateStr}-${newsletter.issueType}-${suffix}`;
     const meta = {
       id: archiveKey,
       subject: newsletter.subject,
       issueType: newsletter.issueType,
       generatedAt: newsletter.generatedAt,
+      topicTags: topicTags || [],
       dateStr,
     };
-    // Store full HTML separately, store metadata in index
-    await env.CONTENT.put(archiveKey, fullHtml);
-    await env.CONTENT.put(`${archiveKey}:body`, rawHtml);
+    await env.CONTENT.put(archiveKey, newsletter.html);
+    await env.CONTENT.put(`${archiveKey}:body`, newsletter.rawHtml || '');
     await env.CONTENT.put(`${archiveKey}:meta`, JSON.stringify(meta));
+    return archiveKey;
   } catch (e) {
     console.error('Failed to save to archive:', e.message);
+    return null;
   }
-
-  return newsletter;
 }
 
 // ─── EMAIL SHELL WRAPPER ─────────────────────────────────────────────────────
 function wrapInEmailShell(innerHtml, subject, issueType) {
-  const dayLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
+  const dayLabel = {
+    'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill',
+    'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk',
+    monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk',
+  };
   const label = dayLabel[issueType] || 'ShieldSmart';
 
   return `<!DOCTYPE html>
@@ -1013,24 +1336,36 @@ function welcomeEmailHtml(firstName) {
 
             <!-- Schedule -->
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 12px;">
-              <strong>Here's what you'll get 3&times; a week:</strong>
+              <strong>Here's what you'll get every weekday:</strong>
             </p>
             <table width="100%" cellpadding="0" cellspacing="0" border="0">
               <tr>
                 <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
-                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128274; <strong>Mondays</strong> — We decode the week's biggest scam so you know exactly what to watch for</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128274; <strong>Mondays</strong> — Threat Radar: We decode the week's biggest threat</p>
                 </td>
               </tr>
               <tr><td style="height:8px;"></td></tr>
               <tr>
                 <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
-                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128161; <strong>Wednesdays</strong> — You learn one simple safety skill you can set up in minutes</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128270; <strong>Tuesdays</strong> — Scam Spotlight: Deep dive into one active scam</p>
                 </td>
               </tr>
               <tr><td style="height:8px;"></td></tr>
               <tr>
                 <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
-                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128187; <strong>Fridays</strong> — We fix a common tech headache with plain-English steps</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128161; <strong>Wednesdays</strong> — Safety Skill: One simple habit you can set up in minutes</p>
+                </td>
+              </tr>
+              <tr><td style="height:8px;"></td></tr>
+              <tr>
+                <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128240; <strong>Thursdays</strong> — News Brief: Quick-hit cybersecurity news digest</p>
+                </td>
+              </tr>
+              <tr><td style="height:8px;"></td></tr>
+              <tr>
+                <td bgcolor="#111311" style="background-color:#111311;padding:14px 20px;border-radius:8px;">
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.8;margin:0;">&#128187; <strong>Fridays</strong> — Fix-It Help Desk: Plain-English solutions to tech problems</p>
                 </td>
               </tr>
             </table>
@@ -1115,26 +1450,42 @@ function welcomeEmailHtml(firstName) {
 // ─── GENERATE DYNAMIC SUBJECT LINES ──────────────────────────────────────────
 function generateSubject(day) {
   const subjects = {
-    monday: [
+    'threat-radar': [
       "🚨 This scam is making the rounds — here's how to dodge it",
       "⚠️ Hackers tried a new trick this week. You need to see this.",
       "🛡️ Before you click that email — read this first",
       "🔍 Spotted: The scam hitting inboxes right now",
     ],
-    wednesday: [
+    'scam-spotlight': [
+      "🔎 Scam Spotlight: This one's fooling thousands right now",
+      "⚠️ Deep Dive: The scam your neighbor almost fell for",
+      "🚫 Don't fall for this — here's exactly how it works",
+      "🔍 We dissected this scam so you don't have to",
+    ],
+    'safety-skill': [
       "🔐 One setting that makes hackers give up on you",
       "💡 Wednesday Skill: 2 minutes that could save your accounts",
       "🛡️ Your Wednesday safety upgrade is here",
       "✅ This one habit stops most hacks cold",
     ],
-    friday: [
+    'news-brief': [
+      "📰 This week in cyber: What you need to know",
+      "⚡ Quick Hits: Today's top cybersecurity news",
+      "📋 Your Thursday security briefing is here",
+      "🗞️ Cyber News Digest: The headlines that matter to you",
+    ],
+    'fix-it': [
       "🛠️ Fix-It Friday: Your tech question answered",
       "💻 That annoying computer problem? Here's the fix.",
       "🎉 Friday Help Desk — plus one quick safety reminder",
       "🔧 Fix-It Friday: We're in your corner",
     ],
+    // Legacy aliases
+    monday: ["🚨 This scam is making the rounds — here's how to dodge it"],
+    wednesday: ["🔐 One setting that makes hackers give up on you"],
+    friday: ["🛠️ Fix-It Friday: Your tech question answered"],
   };
-  const list = subjects[day] || subjects.monday;
+  const list = subjects[day] || subjects['threat-radar'];
   return list[Math.floor(Math.random() * list.length)];
 }
 
@@ -1273,8 +1624,8 @@ async function handleArchiveIndex(request, env) {
     if (val) issues.push(JSON.parse(val));
   }
 
-  const typeLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-  const typeColor = { monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
+  const typeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
+  const typeColor = { 'threat-radar': '#E8443A', 'scam-spotlight': '#FF6B35', 'safety-skill': '#BCE600', 'news-brief': '#5599FF', 'fix-it': '#F5A623', monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
 
   const rows = issues.length === 0
     ? `<p style="color:#7A8070;text-align:center;padding:3rem 0;font-family:'Figtree',sans-serif;">No issues published yet. Check back soon!</p>`
@@ -1337,11 +1688,13 @@ async function handleArchiveIndex(request, env) {
     <span style="font-size:0.68rem;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#BCE600;">Every issue, all in one place</span>
   </div>
   <div style="font-family:'Bebas Neue',sans-serif;font-size:clamp(2.5rem,5vw,3.8rem);letter-spacing:0.03em;color:#fff;line-height:0.95;margin-bottom:0.75rem;">ISSUE ARCHIVE</div>
-  <p style="color:#7A8070;font-size:0.95rem;margin-bottom:2rem;line-height:1.6;">Plain English cyber safety delivered 3&times; a week by <strong style="color:#F2F5E8;">XNL Tech</strong>. Subscribe free to read any issue.</p>
+  <p style="color:#7A8070;font-size:0.95rem;margin-bottom:2rem;line-height:1.6;">Plain English cyber safety delivered every weekday by <strong style="color:#F2F5E8;">XNL Tech</strong>. Subscribe free to read any issue.</p>
 
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2rem;">
     <span style="background:rgba(232,68,58,0.1);border:1px solid rgba(232,68,58,0.25);color:#E8443A;font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:4px 12px;border-radius:100px;">Mon &mdash; Threat Radar</span>
+    <span style="background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.25);color:#FF6B35;font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:4px 12px;border-radius:100px;">Tue &mdash; Scam Spotlight</span>
     <span style="background:rgba(188,230,0,0.08);border:1px solid rgba(188,230,0,0.25);color:#BCE600;font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:4px 12px;border-radius:100px;">Wed &mdash; Safety Skill</span>
+    <span style="background:rgba(85,153,255,0.1);border:1px solid rgba(85,153,255,0.25);color:#5599FF;font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:4px 12px;border-radius:100px;">Thu &mdash; News Brief</span>
     <span style="background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.25);color:#F5A623;font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:4px 12px;border-radius:100px;">Fri &mdash; Fix-It Desk</span>
   </div>
 
@@ -1373,7 +1726,7 @@ async function handleArchiveRead(issueId, env) {
   }
 
   const subject = meta.subject || 'ShieldSmart Issue';
-  const typeLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
+  const typeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
   const label = typeLabel[meta.issueType] || 'ShieldSmart';
   const date = meta.generatedAt ? new Date(meta.generatedAt).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
 
@@ -1727,6 +2080,43 @@ function handleAdminPage() {
         <div id="subTotal" style="color:#F2F5E8; font-size:36px; font-weight:700;">—</div>
       </div>
     </div>
+    <!-- Draft Queue -->
+    <div class="gen-box" id="draftSection">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="font-size:18px;">📋 Draft Queue</h2>
+        <button class="btn btn-lime" style="padding:8px 18px; font-size:13px;" onclick="loadDrafts()">Refresh</button>
+      </div>
+      <div id="draftList" style="color:#7A8070; font-size:14px;">Loading drafts...</div>
+    </div>
+
+    <!-- Draft Preview/Edit Modal -->
+    <div id="draftPreviewArea" class="hidden">
+      <div class="gen-box">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="font-size:18px;">📝 Draft Editor</h2>
+          <button class="btn" style="background:#222;color:#7A8070;padding:6px 14px;font-size:13px;" onclick="closeDraftPreview()">✕ Close</button>
+        </div>
+        <div id="draftQAReport" class="hidden" style="margin-bottom:16px;"></div>
+        <div class="field" style="margin-bottom:12px;">
+          <label for="draftSubjectEdit">Subject Line</label>
+          <input type="text" id="draftSubjectEdit" />
+        </div>
+        <iframe class="preview-frame" id="draftPreviewFrame" sandbox="allow-same-origin" style="height:500px;"></iframe>
+        <div class="field" style="margin-top:12px;">
+          <label for="draftHtmlEdit">HTML Content <span style="color:#5A6050;font-weight:400;">(advanced — edit with care)</span></label>
+          <textarea id="draftHtmlEdit" style="min-height:200px; font-family:monospace; font-size:12px;"></textarea>
+        </div>
+        <div class="btn-group" style="flex-wrap:wrap;">
+          <button class="btn btn-lime" onclick="saveDraftEdits()">💾 Save Edits</button>
+          <button class="btn btn-lime" onclick="refreshDraftPreview()">👁️ Refresh Preview</button>
+          <button class="btn btn-lime" onclick="regenerateDraft()">🔄 Regenerate</button>
+          <button class="btn btn-amber" onclick="approveDraft()">📤 Approve &amp; Send</button>
+          <button class="btn btn-red" onclick="discardDraft()">🗑️ Discard</button>
+        </div>
+        <div class="status" id="draftEditStatus"></div>
+      </div>
+    </div>
+
     <div class="gen-box">
       <h2 style="margin-bottom:20px; font-size:18px;">📨 Generate Newsletter from Reader Question</h2>
       <div class="row">
@@ -1737,9 +2127,11 @@ function handleAdminPage() {
         <div class="field">
           <label for="issueType">Issue Type</label>
           <select id="issueType">
-            <option value="friday" selected>Friday — Fix-It Help Desk</option>
-            <option value="monday">Monday — Threat Radar</option>
-            <option value="wednesday">Wednesday — Safety Skill</option>
+            <option value="fix-it" selected>Friday — Fix-It Help Desk</option>
+            <option value="threat-radar">Monday — Threat Radar</option>
+            <option value="scam-spotlight">Tuesday — Scam Spotlight</option>
+            <option value="safety-skill">Wednesday — Safety Skill</option>
+            <option value="news-brief">Thursday — News Brief</option>
           </select>
         </div>
       </div>
@@ -1784,9 +2176,11 @@ function handleAdminPage() {
         <div class="field">
           <label for="customType">Issue Type (for styling)</label>
           <select id="customType">
-            <option value="monday">Monday — Threat Radar</option>
-            <option value="wednesday">Wednesday — Safety Skill</option>
-            <option value="friday">Friday — Fix-It Help Desk</option>
+            <option value="threat-radar">Monday — Threat Radar</option>
+            <option value="scam-spotlight">Tuesday — Scam Spotlight</option>
+            <option value="safety-skill">Wednesday — Safety Skill</option>
+            <option value="news-brief">Thursday — News Brief</option>
+            <option value="fix-it">Friday — Fix-It Help Desk</option>
           </select>
         </div>
       </div>
@@ -1908,12 +2302,130 @@ function handleAdminPage() {
     if (!adminSecret) { setStatus('loginStatus', 'err', 'Please enter the admin secret.'); return; }
     $('loginBox').classList.add('hidden');
     $('mainPanel').classList.remove('hidden');
+    loadDrafts();
     loadCronLogs();
     loadSubCount();
     loadSubscriberReport();
     loadIssues();
     setInterval(loadSubCount, 30000);
     setInterval(loadCronLogs, 60000);
+    setInterval(loadDrafts, 60000);
+  }
+
+  let currentDraftKey = null;
+
+  var draftTypeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
+  var draftTypeColor = { 'threat-radar': '#E8443A', 'scam-spotlight': '#FF6B35', 'safety-skill': '#BCE600', 'news-brief': '#5599FF', 'fix-it': '#F5A623', monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
+  var statusColor = { pending: '#F5A623', qa_passed: '#BCE600', needs_review: '#E8443A', sent: '#BCE600', discarded: '#7A8070', auto_fixed: '#5599FF', expired: '#7A8070' };
+  var statusLabel = { pending: 'PENDING', qa_passed: 'QA PASSED', needs_review: 'NEEDS REVIEW', sent: 'SENT', discarded: 'DISCARDED', auto_fixed: 'AUTO-FIXED', expired: 'EXPIRED' };
+
+  async function loadDrafts() {
+    var el = $('draftList');
+    try {
+      var res = await fetch('/admin/drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret }) });
+      var data = await res.json();
+      if (!data.drafts || data.drafts.length === 0) { el.innerHTML = '<span style="color:#7A8070;">No drafts. The next draft will be generated at 7:00 AM EST.</span>'; return; }
+      el.innerHTML = data.drafts.map(function(d) {
+        var color = draftTypeColor[d.issueType] || '#BCE600';
+        var sColor = statusColor[d.status] || '#7A8070';
+        var badge = '<span style="display:inline-block;background:' + color + '18;border:1px solid ' + color + '44;color:' + color + ';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;">' + (draftTypeLabel[d.issueType] || d.issueType) + '</span>';
+        var sBadge = '<span style="display:inline-block;background:' + sColor + '18;border:1px solid ' + sColor + '44;color:' + sColor + ';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;">' + (statusLabel[d.status] || d.status) + '</span>';
+        var qaInfo = '';
+        if (d.qaResult) { qaInfo = ' <span style="color:' + (d.qaResult.pass ? '#BCE600' : '#E8443A') + ';font-size:11px;">(' + (d.qaResult.issueCount || 0) + ' issues)</span>'; }
+        var dt = d.generatedAt ? new Date(d.generatedAt).toLocaleString() : '';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1E201E;cursor:pointer;" onclick="openDraftPreview(&apos;' + d.dateKey + '&apos;)">'
+          + badge + ' ' + sBadge + qaInfo
+          + '<span style="flex:1;color:#F2F5E8;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (d.subject || '(no subject)') + '</span>'
+          + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + dt + '</span>'
+          + '</div>';
+      }).join('');
+    } catch (e) { el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>'; }
+  }
+
+  async function openDraftPreview(dateKey) {
+    currentDraftKey = dateKey;
+    setStatus('draftEditStatus', '', '');
+    try {
+      var res = await fetch('/admin/draft-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: dateKey }) });
+      var data = await res.json();
+      if (!data.draft) { alert('Draft not found'); return; }
+      var d = data.draft;
+      $('draftSubjectEdit').value = d.subject || '';
+      $('draftHtmlEdit').value = d.html || '';
+      $('draftPreviewFrame').srcdoc = d.html || '';
+      $('draftPreviewArea').classList.remove('hidden');
+      $('draftPreviewArea').scrollIntoView({ behavior: 'smooth' });
+
+      var qaEl = $('draftQAReport');
+      if (d.qaResult) {
+        qaEl.classList.remove('hidden');
+        var qr = d.qaResult;
+        var bgc = qr.pass ? '#1a2b1a' : '#2b1a1a';
+        var brc = qr.pass ? '#BCE600' : '#E8443A';
+        var issues = (qr.issues || []).map(function(i) { return '<div style="padding:4px 0;border-bottom:1px solid #2a2d2a;font-size:13px;"><strong style="color:#F5A623;">' + (i.type || i.severity || '') + ':</strong> ' + (i.description || i.issue || '') + (i.suggestion ? ' <span style="color:#BCE600;">Fix: ' + i.suggestion + '</span>' : '') + '</div>'; }).join('');
+        qaEl.innerHTML = '<div style="background:' + bgc + ';border:1px solid ' + brc + ';border-radius:8px;padding:16px;">'
+          + '<div style="font-size:14px;font-weight:700;color:' + brc + ';margin-bottom:8px;">QA Report: ' + (qr.pass ? 'PASSED' : 'ISSUES FOUND') + (qr.autoFixed ? ' (auto-fixed)' : '') + '</div>'
+          + '<div style="color:#7A8070;font-size:13px;margin-bottom:8px;">' + (qr.summary || '') + '</div>'
+          + issues + '</div>';
+      } else { qaEl.classList.add('hidden'); qaEl.innerHTML = ''; }
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
+  function closeDraftPreview() { $('draftPreviewArea').classList.add('hidden'); currentDraftKey = null; }
+
+  function refreshDraftPreview() { $('draftPreviewFrame').srcdoc = $('draftHtmlEdit').value; }
+
+  async function saveDraftEdits() {
+    if (!currentDraftKey) return;
+    try {
+      var res = await fetch('/admin/draft-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey, subject: $('draftSubjectEdit').value, html: $('draftHtmlEdit').value }) });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setStatus('draftEditStatus', 'ok', 'Edits saved!');
+      refreshDraftPreview();
+      loadDrafts();
+    } catch (e) { setStatus('draftEditStatus', 'err', 'Save failed: ' + e.message); }
+  }
+
+  async function approveDraft() {
+    if (!currentDraftKey) return;
+    if (!confirm('Send this newsletter to ALL active subscribers?')) return;
+    setStatus('draftEditStatus', 'info', 'Sending to all subscribers...');
+    try {
+      var res = await fetch('/admin/draft-approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setStatus('draftEditStatus', 'ok', 'Sent! ' + data.sent + ' delivered, ' + data.failed + ' failed.');
+      loadDrafts();
+    } catch (e) { setStatus('draftEditStatus', 'err', 'Send failed: ' + e.message); }
+  }
+
+  async function discardDraft() {
+    if (!currentDraftKey) return;
+    if (!confirm('Discard this draft? It will not be sent.')) return;
+    try {
+      var res = await fetch('/admin/draft-discard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      closeDraftPreview();
+      loadDrafts();
+    } catch (e) { alert('Discard failed: ' + e.message); }
+  }
+
+  async function regenerateDraft() {
+    if (!currentDraftKey) return;
+    if (!confirm('Regenerate this draft from scratch? Current content will be replaced.')) return;
+    setStatus('draftEditStatus', 'info', 'Regenerating with fresh threat intel... this may take 30-60 seconds.');
+    try {
+      var res = await fetch('/admin/draft-regenerate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: adminSecret, dateKey: currentDraftKey }) });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      $('draftSubjectEdit').value = data.subject;
+      $('draftHtmlEdit').value = data.html;
+      $('draftPreviewFrame').srcdoc = data.html;
+      setStatus('draftEditStatus', 'ok', 'Regenerated! New subject: ' + data.subject);
+      loadDrafts();
+    } catch (e) { setStatus('draftEditStatus', 'err', 'Regenerate failed: ' + e.message); }
   }
 
   async function loadSubCount() {
@@ -2010,8 +2522,8 @@ function handleAdminPage() {
         el.innerHTML = '<span style="color:#7A8070;">No newsletters in archive yet.</span>';
         return;
       }
-      var typeLabel = { monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-      var typeColor = { monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
+      var typeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
+      var typeColor = { 'threat-radar': '#E8443A', 'scam-spotlight': '#FF6B35', 'safety-skill': '#BCE600', 'news-brief': '#5599FF', 'fix-it': '#F5A623', monday: '#E8443A', wednesday: '#BCE600', friday: '#F5A623' };
       el.innerHTML = data.issues.map(function(issue) {
         var d = new Date(issue.generatedAt).toLocaleString();
         var label = typeLabel[issue.issueType] || 'ShieldSmart';
@@ -2401,7 +2913,7 @@ function handleLandingPage() {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ShieldSmart | Cyber Safety Newsletter by XNL Tech</title>
-  <meta name="description" content="Plain-English cyber safety tips 3x a week. No jargon. Real protection for real people." />
+  <meta name="description" content="Plain-English cyber safety tips every weekday. No jargon. Real protection for real people." />
   <link rel="icon" type="image/png" href="/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -2586,9 +3098,11 @@ function handleLandingPage() {
       gap: 1rem;
       animation: fadeUp 0.5s ease both;
     }
-    .feature:nth-child(1){animation-delay:0.08s}
-    .feature:nth-child(2){animation-delay:0.16s}
-    .feature:nth-child(3){animation-delay:0.24s}
+    .feature:nth-child(1){animation-delay:0.06s}
+    .feature:nth-child(2){animation-delay:0.12s}
+    .feature:nth-child(3){animation-delay:0.18s}
+    .feature:nth-child(4){animation-delay:0.24s}
+    .feature:nth-child(5){animation-delay:0.30s}
 
     .feat-icon {
       width: 36px; height: 36px;
@@ -2974,7 +3488,7 @@ function handleLandingPage() {
     <div class="left-inner">
       <div class="eyebrow">
         <span class="eyebrow-dot"></span>
-        Free Cyber Safety Newsletter &mdash; 3&times; a week
+        Free Cyber Safety Newsletter &mdash; 5&times; a week
       </div>
 
       <h1>
@@ -2984,37 +3498,53 @@ function handleLandingPage() {
       </h1>
 
       <p class="hero-desc">
-        Plain English alerts and practical tips to keep you safe online &mdash;
-        no tech degree required. Built for everyday people by <strong style="color:var(--off)">XNL Tech</strong>.
+        Real-time cybersecurity alerts and practical tips delivered to your inbox every weekday &mdash;
+        no tech degree required. Powered by live threat intelligence, built for everyday people by <strong style="color:var(--off)">XNL Tech</strong>.
       </p>
 
       <div class="features">
         <div class="feature">
+          <div class="feat-icon">&#128680;</div>
+          <div>
+            <div class="feat-title">Monday &mdash; Threat Radar</div>
+            <div class="feat-body">We decode the week's biggest cyber threat using live intelligence from top security sources &mdash; so you know what to watch for.</div>
+          </div>
+        </div>
+        <div class="feature">
           <div class="feat-icon">&#128270;</div>
           <div>
-            <div class="feat-title">Scam alerts before they reach you</div>
-            <div class="feat-body">We track the latest phishing tricks, AI voice scams, and fake texts &mdash; decoded in plain language so you spot them before clicking.</div>
+            <div class="feat-title">Tuesday &mdash; Scam Spotlight</div>
+            <div class="feat-body">A deep dive into one active scam: how it works, who it targets, and exactly how to protect yourself.</div>
           </div>
         </div>
         <div class="feature">
           <div class="feat-icon">&#128274;</div>
           <div>
-            <div class="feat-title">One safety skill every Wednesday</div>
-            <div class="feat-body">Passwords, two-factor login, privacy settings &mdash; we build your defenses one step at a time. No overwhelm.</div>
+            <div class="feat-title">Wednesday &mdash; Safety Skill</div>
+            <div class="feat-body">One simple security habit you can set up in minutes. Passwords, 2FA, privacy settings &mdash; we build your defenses step by step.</div>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feat-icon">&#128240;</div>
+          <div>
+            <div class="feat-title">Thursday &mdash; News Brief</div>
+            <div class="feat-body">A quick-hit digest of the cybersecurity headlines that actually matter to you &mdash; no jargon, just the facts.</div>
           </div>
         </div>
         <div class="feature">
           <div class="feat-icon">&#128187;</div>
           <div>
-            <div class="feat-title">Friday Fix-It help desk</div>
-            <div class="feat-body">Slow computer? Mystery charge? Every Friday we answer a real reader question with clear, step-by-step guidance.</div>
+            <div class="feat-title">Friday &mdash; Fix-It Help Desk</div>
+            <div class="feat-body">Slow computer? Mystery charge? We tackle a common tech headache with clear, step-by-step guidance anyone can follow.</div>
           </div>
         </div>
       </div>
 
       <div class="schedule">
         <div class="sched-pill"><span class="day">MON</span>&nbsp;Threat Radar</div>
+        <div class="sched-pill"><span class="day">TUE</span>&nbsp;Scam Spotlight</div>
         <div class="sched-pill"><span class="day">WED</span>&nbsp;Safety Skill</div>
+        <div class="sched-pill"><span class="day">THU</span>&nbsp;News Brief</div>
         <div class="sched-pill"><span class="day">FRI</span>&nbsp;Fix-It Desk</div>
       </div>
 
@@ -3039,7 +3569,7 @@ function handleLandingPage() {
       <div id="form-wrapper">
         <div class="form-headline">JOIN FOR FREE</div>
         <p class="form-sub">
-          Get the knowledge to stay one step ahead.
+          5 issues a week. Real threats. Plain English. Zero jargon.
           <span class="free-badge">Always Free</span>
         </p>
 
@@ -3059,19 +3589,27 @@ function handleLandingPage() {
           <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
         </div>
 
-        <div class="freq-label">Issues you'll receive</div>
+        <div class="freq-label">Your weekday lineup</div>
         <div class="freq-row">
           <div class="freq-opt active" onclick="this.classList.toggle('active')">
             <span class="freq-day">MON</span>
-            <span class="freq-topic">Threat Radar</span>
+            <span class="freq-topic">Threats</span>
+          </div>
+          <div class="freq-opt active" onclick="this.classList.toggle('active')">
+            <span class="freq-day">TUE</span>
+            <span class="freq-topic">Scams</span>
           </div>
           <div class="freq-opt active" onclick="this.classList.toggle('active')">
             <span class="freq-day">WED</span>
-            <span class="freq-topic">Safety Skill</span>
+            <span class="freq-topic">Skills</span>
+          </div>
+          <div class="freq-opt active" onclick="this.classList.toggle('active')">
+            <span class="freq-day">THU</span>
+            <span class="freq-topic">News</span>
           </div>
           <div class="freq-opt active" onclick="this.classList.toggle('active')">
             <span class="freq-day">FRI</span>
-            <span class="freq-topic">Fix-It Desk</span>
+            <span class="freq-topic">Fix-It</span>
           </div>
         </div>
 
@@ -3094,7 +3632,7 @@ function handleLandingPage() {
         <div class="success-icon">&#128737;</div>
         <h3>YOU'RE ALL SET!</h3>
         <p>Welcome to ShieldSmart. Check your inbox &mdash; a welcome message is on its way.<br/><br/>
-        Your first issue arrives <strong style="color:var(--off)">this Monday.</strong></p>
+        Your first issue arrives <strong style="color:var(--off)">tomorrow morning.</strong> We send every weekday.</p>
         <div style="background:rgba(188,230,0,0.08);border:1px solid rgba(188,230,0,0.25);border-radius:10px;padding:16px 20px;margin-top:18px;text-align:left;font-size:0.92rem;line-height:1.6;color:var(--muted);">
           <strong style="color:#BCE600;">&#128235; Don't see it?</strong> Check your <strong style="color:var(--off)">Spam</strong> or <strong style="color:var(--off)">Junk</strong> folder &mdash; sometimes new senders land there. To make sure you never miss an issue:<br/>
           &bull; Move our welcome email to your Inbox<br/>
@@ -3140,7 +3678,7 @@ function handleLandingPage() {
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">2. How We Use Your Information</h3>
       <p style="margin-bottom:0.5rem;">We use your information solely to:</p>
       <ul style="margin:0 0 1.25rem 1.25rem;">
-        <li>Send you the ShieldSmart newsletter (Monday, Wednesday, Friday)</li>
+        <li>Send you the ShieldSmart newsletter (Monday through Friday)</li>
         <li>Send you a welcome email upon subscribing</li>
         <li>Respond to questions or support requests you send us</li>
       </ul>
@@ -3277,6 +3815,677 @@ async function handleLogo(env) {
       'Cache-Control': 'public, max-age=31536000, immutable',
       ...CORS,
     },
+  });
+}
+
+// ─── RSS THREAT INTELLIGENCE FETCHER ──────────────────────────────────────────
+const THREAT_FEEDS = [
+  { name: 'KrebsOnSecurity', url: 'https://krebsonsecurity.com/feed/' },
+  { name: 'BleepingComputer', url: 'https://www.bleepingcomputer.com/feed/' },
+  { name: 'The Hacker News', url: 'https://feeds.feedburner.com/TheHackersNews' },
+  { name: 'CISA Alerts', url: 'https://www.cisa.gov/cybersecurity-advisories/all.xml' },
+  { name: 'Naked Security', url: 'https://nakedsecurity.sophos.com/feed/' },
+];
+
+function parseRSSItems(xmlText, sourceName) {
+  const items = [];
+  const itemRegex = /<item[\s>]([\s\S]*?)<\/item>/gi;
+  let match;
+  while ((match = itemRegex.exec(xmlText)) !== null) {
+    const block = match[1];
+    const title = (block.match(/<title[^>]*>([\s\S]*?)<\/title>/) || [])[1] || '';
+    const desc = (block.match(/<description[^>]*>([\s\S]*?)<\/description>/) || [])[1] || '';
+    const pubDate = (block.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
+    const link = (block.match(/<link[^>]*>([\s\S]*?)<\/link>/) || [])[1] || '';
+    const cleanTitle = title.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, '').trim();
+    const cleanDesc = desc.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').trim().slice(0, 200);
+    if (cleanTitle) {
+      items.push({
+        title: cleanTitle,
+        summary: cleanDesc,
+        date: pubDate.trim(),
+        source: sourceName,
+        link: link.replace(/<!\[CDATA\[|\]\]>/g, '').trim(),
+      });
+    }
+  }
+  // Also try <entry> for Atom feeds
+  const entryRegex = /<entry[\s>]([\s\S]*?)<\/entry>/gi;
+  while ((match = entryRegex.exec(xmlText)) !== null) {
+    const block = match[1];
+    const title = (block.match(/<title[^>]*>([\s\S]*?)<\/title>/) || [])[1] || '';
+    const summary = (block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/) || [])[1] || '';
+    const updated = (block.match(/<updated[^>]*>([\s\S]*?)<\/updated>/) || [])[1] || '';
+    const cleanTitle = title.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, '').trim();
+    const cleanSummary = summary.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').trim().slice(0, 200);
+    if (cleanTitle) {
+      items.push({ title: cleanTitle, summary: cleanSummary, date: updated.trim(), source: sourceName, link: '' });
+    }
+  }
+  return items;
+}
+
+async function fetchThreatIntel(env) {
+  const CACHE_KEY = 'cache:threat-intel';
+  const CACHE_TTL = 6 * 60 * 60; // 6 hours in seconds
+
+  try {
+    const cached = await env.CONTENT.get(CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      const age = (Date.now() - parsed.fetchedAt) / 1000;
+      if (age < CACHE_TTL) return parsed;
+    }
+  } catch (_) {}
+
+  const results = await Promise.allSettled(
+    THREAT_FEEDS.map(async (feed) => {
+      const resp = await fetch(feed.url, {
+        headers: { 'User-Agent': 'ShieldSmart-Newsletter/1.0' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const xml = await resp.text();
+      return parseRSSItems(xml, feed.name);
+    })
+  );
+
+  let allItems = [];
+  const feedStatus = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      allItems = allItems.concat(r.value);
+      feedStatus.push({ name: THREAT_FEEDS[i].name, ok: true, count: r.value.length });
+    } else {
+      feedStatus.push({ name: THREAT_FEEDS[i].name, ok: false, error: r.reason?.message });
+    }
+  });
+
+  // Filter to last 5 days and sort by date descending
+  const fiveDaysAgo = Date.now() - 5 * 24 * 60 * 60 * 1000;
+  allItems = allItems.filter(item => {
+    if (!item.date) return true; // keep items without dates
+    const d = new Date(item.date).getTime();
+    return !isNaN(d) ? d > fiveDaysAgo : true;
+  });
+  allItems.sort((a, b) => {
+    const da = new Date(a.date || 0).getTime() || 0;
+    const db = new Date(b.date || 0).getTime() || 0;
+    return db - da;
+  });
+
+  // Deduplicate by similar titles
+  const seen = new Set();
+  allItems = allItems.filter(item => {
+    const key = item.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const intel = {
+    items: allItems.slice(0, 20),
+    feedStatus,
+    fetchedAt: Date.now(),
+    totalItems: allItems.length,
+  };
+
+  try {
+    await env.CONTENT.put(CACHE_KEY, JSON.stringify(intel), { expirationTtl: CACHE_TTL });
+  } catch (_) {}
+
+  return intel;
+}
+
+function formatThreatIntelForPrompt(intel) {
+  if (!intel || !intel.items || intel.items.length === 0) {
+    return '';
+  }
+  const lines = intel.items.slice(0, 15).map((item, i) => {
+    const dateStr = item.date ? new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return `${i + 1}. ${item.title} — [${item.source}${dateStr ? ', ' + dateStr : ''}]\n   ${item.summary}`;
+  });
+  return `\n\nREAL-TIME THREAT INTELLIGENCE — Base your content on these ACTUAL current stories from the last few days:\n${lines.join('\n\n')}\n\nYou MUST reference or draw from the real stories above. Do NOT make up threats.`;
+}
+
+// ─── DRAFT KV HELPERS ─────────────────────────────────────────────────────────
+async function saveDraft(env, draft) {
+  const key = `draft:${draft.dateKey || new Date().toISOString().split('T')[0]}`;
+  await env.CONTENT.put(key, JSON.stringify(draft));
+  return key;
+}
+
+async function getDraft(env, dateKey) {
+  const key = dateKey.startsWith('draft:') ? dateKey : `draft:${dateKey}`;
+  const val = await env.CONTENT.get(key);
+  return val ? JSON.parse(val) : null;
+}
+
+async function updateDraft(env, dateKey, updates) {
+  const draft = await getDraft(env, dateKey);
+  if (!draft) return null;
+  Object.assign(draft, updates);
+  const key = dateKey.startsWith('draft:') ? dateKey : `draft:${dateKey}`;
+  await env.CONTENT.put(key, JSON.stringify(draft));
+  return draft;
+}
+
+async function listDrafts(env) {
+  const list = await env.CONTENT.list({ prefix: 'draft:' });
+  const drafts = [];
+  for (const key of list.keys) {
+    const val = await env.CONTENT.get(key.name);
+    if (val) {
+      const d = JSON.parse(val);
+      d._key = key.name;
+      drafts.push(d);
+    }
+  }
+  return drafts.sort((a, b) => (b.generatedAt || '').localeCompare(a.generatedAt || ''));
+}
+
+async function deleteDraft(env, dateKey) {
+  const key = dateKey.startsWith('draft:') ? dateKey : `draft:${dateKey}`;
+  await env.CONTENT.delete(key);
+}
+
+// ─── TOPIC DEDUP (ENHANCED) ──────────────────────────────────────────────────
+async function getRecentTopicsForDedup(env) {
+  const subjects = [];
+
+  // Fetch last 30 archived issues
+  try {
+    const list = await env.CONTENT.list({ prefix: 'issue:' });
+    const metaKeys = list.keys
+      .filter(k => k.name.endsWith(':meta'))
+      .sort((a, b) => b.name.localeCompare(a.name))
+      .slice(0, 30);
+    for (const key of metaKeys) {
+      const val = await env.CONTENT.get(key.name);
+      if (val) {
+        const meta = JSON.parse(val);
+        subjects.push({
+          subject: meta.subject,
+          tags: meta.topicTags || [],
+          type: meta.issueType,
+        });
+      }
+    }
+  } catch (_) {}
+
+  // Also include pending/needs_review drafts
+  try {
+    const drafts = await listDrafts(env);
+    for (const d of drafts) {
+      if (d.status === 'pending' || d.status === 'needs_review') {
+        subjects.push({
+          subject: d.subject,
+          tags: d.topicTags || [],
+          type: d.issueType,
+        });
+      }
+    }
+  } catch (_) {}
+
+  return subjects;
+}
+
+function formatDedupForPrompt(recentTopics) {
+  if (!recentTopics || recentTopics.length === 0) return '';
+  const lines = recentTopics.map(t => {
+    const tags = t.tags && t.tags.length > 0 ? ` (tags: ${t.tags.join(', ')})` : '';
+    return `- ${t.subject}${tags}`;
+  });
+  return `\n\nALREADY COVERED — Do NOT repeat any of these topics or angles:\n${lines.join('\n')}\nChoose a COMPLETELY DIFFERENT topic that has NOT been covered above.`;
+}
+
+// ─── AUTOMATED QA CHECKER ─────────────────────────────────────────────────────
+function runProgrammaticQA(draft) {
+  const issues = [];
+
+  if (!draft.html || !draft.subject) {
+    issues.push({ severity: 'major', issue: 'Missing HTML content or subject line' });
+    return { pass: false, issues, severity: 'major' };
+  }
+
+  const textContent = draft.html.replace(/<[^>]+>/g, '');
+
+  // Check content length
+  if (textContent.length < 500) {
+    issues.push({ severity: 'major', issue: `Content too short (${textContent.length} chars, minimum 500)` });
+  }
+  if (textContent.length > 20000) {
+    issues.push({ severity: 'minor', issue: `Content very long (${textContent.length} chars)` });
+  }
+
+  // Check for garbled/weird characters
+  const mojibake = /[\x00-\x08\x0B\x0C\x0E-\x1F]|[\uFFFD]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+  const weirdChars = textContent.match(mojibake);
+  if (weirdChars && weirdChars.length > 0) {
+    issues.push({ severity: 'major', issue: `Found ${weirdChars.length} garbled/malformed characters` });
+  }
+
+  // Check for excessive special unicode
+  const excessiveSymbols = textContent.match(/[\u2000-\u2BFF\u2E00-\u2E7F\u3000-\u303F]/g);
+  if (excessiveSymbols && excessiveSymbols.length > 50) {
+    issues.push({ severity: 'minor', issue: `Excessive special Unicode symbols (${excessiveSymbols.length})` });
+  }
+
+  // Check for broken HTML patterns
+  if (draft.html.includes('undefined') || draft.html.includes('[object Object]')) {
+    issues.push({ severity: 'major', issue: 'HTML contains "undefined" or "[object Object]"' });
+  }
+
+  // Check for code fences that weren't stripped
+  if (/```/.test(draft.html)) {
+    issues.push({ severity: 'major', issue: 'HTML contains markdown code fences (```)' });
+  }
+
+  // Check subject line
+  if (draft.subject.length < 10) {
+    issues.push({ severity: 'major', issue: 'Subject line too short' });
+  }
+  if (draft.subject.length > 150) {
+    issues.push({ severity: 'minor', issue: 'Subject line very long (may get truncated)' });
+  }
+
+  // Check for brand colors presence
+  const hasBrandColor = /#BCE600|#F2F5E8|#1E201E|#111311/i.test(draft.html);
+  if (!hasBrandColor) {
+    issues.push({ severity: 'minor', issue: 'Missing brand colors in HTML' });
+  }
+
+  // Check for empty sections
+  const emptyDivs = draft.html.match(/<div[^>]*>\s*<\/div>/g);
+  if (emptyDivs && emptyDivs.length > 3) {
+    issues.push({ severity: 'minor', issue: `Found ${emptyDivs.length} empty div elements` });
+  }
+
+  const hasMajor = issues.some(i => i.severity === 'major');
+  return {
+    pass: issues.length === 0,
+    issues,
+    severity: hasMajor ? 'major' : issues.length > 0 ? 'minor' : 'none',
+  };
+}
+
+async function runClaudeQA(draft, env) {
+  const textContent = draft.html.replace(/<[^>]+>/g, '').slice(0, 6000);
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      system: `You are a newsletter QA editor for ShieldSmart, a cybersecurity newsletter for non-tech-savvy everyday people. Your job is to proofread and check quality. Be strict but fair.`,
+      messages: [{
+        role: 'user',
+        content: `Review this newsletter draft. Check for:
+1. Grammar and spelling mistakes
+2. Awkward phrasing or sentences that don't flow
+3. Tone issues (too scary, too much jargon, not warm enough for non-tech audience)
+4. Factual inconsistencies
+5. Missing sign-off or incomplete sections
+
+Subject: ${draft.subject}
+Issue Type: ${draft.issueType}
+
+Content:
+${textContent}
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{
+  "pass": true/false,
+  "severity": "none" | "minor" | "major",
+  "issues": [{"type": "grammar|tone|flow|factual|structure", "description": "...", "suggestion": "..."}],
+  "topicTags": ["tag1", "tag2", "tag3"],
+  "summary": "One sentence summary of overall quality"
+}`
+      }],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`QA API error: ${err}`);
+  }
+
+  const data = await response.json();
+  let raw = data.content[0].text.trim();
+  raw = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return { pass: false, severity: 'major', issues: [{ type: 'structure', description: 'QA response was not valid JSON', suggestion: raw.slice(0, 200) }], topicTags: [], summary: 'QA parse error' };
+  }
+}
+
+async function autoFixDraft(draft, qaResult, env) {
+  const issuesList = (qaResult.issues || []).map(i => `- ${i.type}: ${i.description}${i.suggestion ? ' (fix: ' + i.suggestion + ')' : ''}`).join('\n');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 10000,
+      system: `You are an editor fixing a newsletter draft. Apply the requested fixes while preserving all HTML structure, inline styles, and brand formatting. Output ONLY the corrected full HTML — no explanation, no markdown, no code fences.`,
+      messages: [{
+        role: 'user',
+        content: `Fix these issues in the newsletter HTML:\n${issuesList}\n\nOriginal subject: ${draft.subject}\n\nOriginal HTML:\n${draft.html}`
+      }],
+    }),
+  });
+
+  if (!response.ok) throw new Error('Auto-fix API error: ' + await response.text());
+
+  const data = await response.json();
+  let fixedHtml = data.content[0].text.trim();
+  fixedHtml = fixedHtml.replace(/```html\s*/gi, '').replace(/```\s*/gi, '').trim();
+  return fixedHtml;
+}
+
+// ─── STATUS REPORT EMAIL ──────────────────────────────────────────────────────
+async function sendStatusReport(env, report) {
+  const to = 'help@xnltech.com';
+  const overallStatus = report.failed > 0 ? (report.sent === 0 ? 'FAIL' : 'PARTIAL FAIL') : 'SUCCESS';
+  const subject = `ShieldSmart Daily Report: ${overallStatus} — "${report.subject}"`;
+
+  const issueTypeLabels = {
+    'threat-radar': 'Monday Threat Radar',
+    'scam-spotlight': 'Tuesday Scam Spotlight',
+    'safety-skill': 'Wednesday Safety Skill',
+    'news-brief': 'Thursday News Brief',
+    'fix-it': 'Friday Fix-It Help Desk',
+    monday: 'Monday Threat Radar',
+    wednesday: 'Wednesday Safety Skill',
+    friday: 'Friday Fix-It Help Desk',
+  };
+
+  const qaSection = report.qaResult ? `
+    <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;">
+      <div style="color:#7A8070;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">QA Results</div>
+      <div style="color:#F2F5E8;font-size:14px;">
+        <strong style="color:${report.qaResult.pass ? '#BCE600' : '#E8443A'};">${report.qaResult.pass ? 'PASSED' : 'ISSUES FOUND'}</strong>
+        ${report.qaResult.summary ? ' — ' + report.qaResult.summary : ''}
+        ${report.qaResult.autoFixed ? '<br/><span style="color:#F5A623;">Auto-fixes were applied</span>' : ''}
+      </div>
+    </td></tr>` : '';
+
+  const xPostSection = report.xPostStatus ? `
+    <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;">
+      <div style="color:#7A8070;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">X (Twitter) Post</div>
+      <div style="color:${report.xPostStatus === 'posted' ? '#BCE600' : '#E8443A'};font-size:14px;font-weight:600;">${report.xPostStatus === 'posted' ? 'POSTED' : 'FAILED: ' + (report.xPostError || 'unknown')}</div>
+      ${report.tweetText ? '<div style="color:#7A8070;font-size:13px;margin-top:6px;white-space:pre-wrap;">' + report.tweetText + '</div>' : ''}
+    </td></tr>` : '';
+
+  const growthSection = report.growth ? `
+    <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;">
+      <div style="color:#7A8070;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Subscriber Growth</div>
+      <div style="color:#F2F5E8;font-size:14px;">
+        <strong style="color:#BCE600;">${report.growth.totalActive}</strong> active subscribers
+        ${report.growth.netChange !== undefined ? ` (${report.growth.netChange >= 0 ? '+' : ''}${report.growth.netChange} today)` : ''}
+      </div>
+      ${report.growth.newToday ? '<div style="color:#7A8070;font-size:13px;margin-top:4px;">New today: ' + report.growth.newToday + ' | Unsubscribed: ' + (report.growth.unsubscribedToday || 0) + '</div>' : ''}
+      ${report.growth.weeklyChange !== undefined ? '<div style="color:#7A8070;font-size:13px;margin-top:4px;">This week: ' + (report.growth.weeklyChange >= 0 ? '+' : '') + report.growth.weeklyChange + ' net</div>' : ''}
+      ${report.growth.tip ? '<div style="background:#1A2600;border:1px solid #4A6600;border-radius:8px;padding:12px;margin-top:10px;color:#BCE600;font-size:13px;">' + report.growth.tip + '</div>' : ''}
+    </td></tr>` : '';
+
+  const emailHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#111311;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#111311"><tr><td align="center" style="padding:24px;">
+<table width="600" cellpadding="0" cellspacing="0" bgcolor="#1E201E" style="max-width:600px;width:100%;border-radius:12px;">
+  <tr><td style="padding:24px;border-bottom:2px solid #BCE600;">
+    <div style="font-size:20px;font-weight:800;color:#FFF;">SHIELD<span style="color:#BCE600;">SMART</span> <span style="font-size:12px;color:#F5A623;font-weight:700;background:#F5A62320;padding:2px 8px;border-radius:4px;">DAILY REPORT</span></div>
+  </td></tr>
+  <tr><td style="padding:20px 24px;">
+    <div style="font-size:28px;font-weight:700;color:${overallStatus === 'SUCCESS' ? '#BCE600' : '#E8443A'};">${overallStatus}</div>
+    <div style="color:#F2F5E8;font-size:16px;margin-top:8px;">${report.subject}</div>
+    <div style="color:#7A8070;font-size:13px;margin-top:4px;">${issueTypeLabels[report.issueType] || report.issueType} — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div>
+  </td></tr>
+  <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;">
+    <div style="color:#7A8070;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Delivery</div>
+    <div style="color:#F2F5E8;font-size:14px;">
+      <strong style="color:#BCE600;">${report.sent}</strong> sent &nbsp;|&nbsp;
+      <strong style="color:${report.failed > 0 ? '#E8443A' : '#7A8070'};">${report.failed}</strong> failed &nbsp;|&nbsp;
+      <strong>${report.totalSubscribers || (report.sent + report.failed)}</strong> total
+    </div>
+  </td></tr>
+  <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;">
+    <div style="color:#7A8070;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">How It Was Sent</div>
+    <div style="color:#F2F5E8;font-size:14px;">${report.sendMethod || 'Unknown'}</div>
+  </td></tr>
+  ${qaSection}${xPostSection}${growthSection}
+  <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;text-align:center;">
+    <a href="https://xnltech.com/admin" style="display:inline-block;background:#BCE600;color:#111311;padding:10px 24px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">Open Admin Panel</a>
+  </td></tr>
+</table>
+</td></tr></table></body></html>`;
+
+  try {
+    await sendEmail({ email: to }, emailHtml, subject, env);
+  } catch (e) {
+    console.error('Status report email failed:', e.message);
+  }
+}
+
+// ─── X (TWITTER) AUTO-POST ────────────────────────────────────────────────────
+async function generateTweet(newsletterSubject, issueType, env) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      system: `You write viral tweets for ShieldSmart, a free cybersecurity newsletter for everyday people by XNL Tech. Tone: urgent but friendly, relatable. Goal: drive subscriptions to xnltech.com. Never use hashtags excessively — max 1-2.`,
+      messages: [{
+        role: 'user',
+        content: `Write a single tweet (max 270 characters) promoting today's ShieldSmart newsletter.
+
+Newsletter subject: "${newsletterSubject}"
+Issue type: ${issueType}
+
+The tweet should:
+- Hook with the threat/topic from the subject
+- Create urgency without fearmongering
+- End with a CTA to subscribe at xnltech.com
+- Be under 270 characters (leave room for platform formatting)
+
+Output ONLY the tweet text. No quotes, no labels, no explanation.`
+      }],
+    }),
+  });
+
+  if (!response.ok) throw new Error('Tweet generation failed: ' + await response.text());
+  const data = await response.json();
+  return data.content[0].text.trim().replace(/^["']|["']$/g, '');
+}
+
+function buildOAuthHeader(method, url, params, env) {
+  const oauthParams = {
+    oauth_consumer_key: env.X_API_KEY,
+    oauth_nonce: crypto.randomUUID().replace(/-/g, ''),
+    oauth_signature_method: 'HMAC-SHA1',
+    oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
+    oauth_token: env.X_ACCESS_TOKEN,
+    oauth_version: '1.0',
+  };
+
+  const allParams = { ...oauthParams, ...params };
+  const paramString = Object.keys(allParams).sort()
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(allParams[k])}`)
+    .join('&');
+
+  const baseString = `${method.toUpperCase()}&${encodeURIComponent(url)}&${encodeURIComponent(paramString)}`;
+  const signingKey = `${encodeURIComponent(env.X_API_SECRET)}&${encodeURIComponent(env.X_ACCESS_SECRET)}`;
+
+  return crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(signingKey),
+    { name: 'HMAC', hash: 'SHA-1' },
+    false,
+    ['sign']
+  ).then(key =>
+    crypto.subtle.sign('HMAC', key, new TextEncoder().encode(baseString))
+  ).then(sig => {
+    const signature = btoa(String.fromCharCode(...new Uint8Array(sig)));
+    oauthParams.oauth_signature = signature;
+    const headerParts = Object.keys(oauthParams).sort()
+      .map(k => `${encodeURIComponent(k)}="${encodeURIComponent(oauthParams[k])}"`)
+      .join(', ');
+    return `OAuth ${headerParts}`;
+  });
+}
+
+async function postToX(text, env) {
+  if (!env.X_API_KEY || !env.X_ACCESS_TOKEN) {
+    console.log('[SKIP] X posting: API keys not configured');
+    return { posted: false, reason: 'not_configured' };
+  }
+
+  const url = 'https://api.x.com/2/tweets';
+  const authHeader = await buildOAuthHeader('POST', url, {}, env);
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`X API error (${resp.status}): ${err}`);
+  }
+
+  const result = await resp.json();
+  return { posted: true, tweetId: result.data?.id };
+}
+
+// ─── SUBSCRIBER GROWTH TRACKING ───────────────────────────────────────────────
+async function takeGrowthSnapshot(env) {
+  const today = new Date().toISOString().split('T')[0];
+  const key = `growth:${today}`;
+
+  // Count current subscribers
+  const list = await env.SUBSCRIBERS.list({ prefix: 'sub:' });
+  let totalActive = 0;
+  let totalInactive = 0;
+  for (const k of list.keys) {
+    const val = await env.SUBSCRIBERS.get(k.name);
+    if (val) {
+      const sub = JSON.parse(val);
+      if (sub.active) totalActive++; else totalInactive++;
+    }
+  }
+
+  // Get yesterday's snapshot for comparison
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  let prevSnap = null;
+  try {
+    const prev = await env.CONTENT.get(`growth:${yesterday}`);
+    if (prev) prevSnap = JSON.parse(prev);
+  } catch (_) {}
+
+  // Get last week's snapshot
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  let weekSnap = null;
+  try {
+    const ws = await env.CONTENT.get(`growth:${weekAgo}`);
+    if (ws) weekSnap = JSON.parse(ws);
+  } catch (_) {}
+
+  const snapshot = {
+    date: today,
+    totalActive,
+    totalInactive,
+    newToday: prevSnap ? Math.max(0, totalActive - prevSnap.totalActive + (prevSnap.totalInactive < totalInactive ? totalInactive - prevSnap.totalInactive : 0)) : 0,
+    unsubscribedToday: prevSnap ? Math.max(0, prevSnap.totalActive - totalActive + (totalActive > prevSnap.totalActive ? totalActive - prevSnap.totalActive : 0)) : 0,
+    netChange: prevSnap ? (totalActive - prevSnap.totalActive) : 0,
+    weeklyChange: weekSnap ? (totalActive - weekSnap.totalActive) : undefined,
+  };
+
+  await env.CONTENT.put(key, JSON.stringify(snapshot));
+  return snapshot;
+}
+
+async function generateGrowthTip(growth, env) {
+  if (!env.ANTHROPIC_API_KEY) return '';
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 200,
+        system: 'You give brief, actionable newsletter growth tips. One sentence only.',
+        messages: [{
+          role: 'user',
+          content: `ShieldSmart newsletter stats: ${growth.totalActive} active subscribers, ${growth.netChange >= 0 ? '+' : ''}${growth.netChange} today, ${growth.weeklyChange !== undefined ? (growth.weeklyChange >= 0 ? '+' : '') + growth.weeklyChange + ' this week' : 'no weekly data yet'}. Give one specific, actionable growth tip.`
+        }],
+      }),
+    });
+    if (!response.ok) return '';
+    const data = await response.json();
+    return data.content[0].text.trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+// ─── POST-SEND PIPELINE ──────────────────────────────────────────────────────
+async function runPostSendPipeline(newsletter, sendResult, sendMethod, qaResult, env) {
+  const growth = await takeGrowthSnapshot(env);
+  const tip = await generateGrowthTip(growth, env);
+  growth.tip = tip;
+
+  let xPostStatus = 'skipped';
+  let xPostError = '';
+  let tweetText = '';
+
+  try {
+    tweetText = await generateTweet(newsletter.subject, newsletter.issueType, env);
+    const xResult = await postToX(tweetText, env);
+    xPostStatus = xResult.posted ? 'posted' : 'skipped';
+    if (!xResult.posted) xPostError = xResult.reason || '';
+  } catch (e) {
+    xPostStatus = 'failed';
+    xPostError = e.message;
+    console.error('X post failed:', e.message);
+  }
+
+  await sendStatusReport(env, {
+    subject: newsletter.subject,
+    issueType: newsletter.issueType,
+    sent: sendResult.sent,
+    failed: sendResult.failed,
+    totalSubscribers: sendResult.total,
+    sendMethod,
+    qaResult: qaResult || null,
+    xPostStatus,
+    xPostError,
+    tweetText,
+    growth,
   });
 }
 
