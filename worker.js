@@ -1,5 +1,5 @@
 /**
- * ShieldSmart Newsletter Worker
+ * XNL Cyber Shield Newsletter Worker
  * XNL Tech (affiliated: PromptMechanics.org)
  *
  * Routes:
@@ -12,7 +12,7 @@
  *   ANTHROPIC_API_KEY        — Your Anthropic API key
  *   ADMIN_SECRET             — Secret token for protected admin routes
  *   SEND_API_KEY             — (Optional) Your email sending service key (Mailgun, SendGrid, etc.)
- *   SEND_FROM                — e.g. "ShieldSmart <hello@xnltech.com>"
+ *   SEND_FROM                — e.g. "XNL Cyber Shield <hello@xnltech.com>"
  *   SEND_DOMAIN              — e.g. "xnltech.com" (Mailgun domain)
  *
  * KV Namespace:
@@ -319,7 +319,7 @@ export default {
 <table width="100%" cellpadding="0" cellspacing="0" bgcolor="#111311"><tr><td align="center" style="padding:24px;">
 <table width="600" cellpadding="0" cellspacing="0" bgcolor="#1E201E" style="max-width:600px;width:100%;border-radius:12px;">
   <tr><td style="padding:24px;border-bottom:2px solid #E8443A;">
-    <div style="font-size:20px;font-weight:800;color:#FFF;">SHIELD<span style="color:#BCE600;">SMART</span> <span style="font-size:12px;color:#E8443A;font-weight:700;">DRAFT NEEDS REVIEW</span></div>
+    <div style="font-size:20px;font-weight:800;color:#FFF;">XNL CYBER <span style="color:#BCE600;">SHIELD</span> <span style="font-size:12px;color:#E8443A;font-weight:700;">DRAFT NEEDS REVIEW</span></div>
   </td></tr>
   <tr><td style="padding:20px 24px;">
     <div style="color:#F2F5E8;font-size:16px;font-weight:700;margin-bottom:8px;">Subject: ${draft.subject}</div>
@@ -334,7 +334,7 @@ export default {
 </table></td></tr></table></body></html>`;
 
             try {
-              await sendEmail({ email: 'help@xnltech.com' }, notifyHtml, `⚠️ ShieldSmart Draft Needs Review: "${draft.subject}"`, env);
+              await sendEmail({ email: 'help@xnltech.com' }, notifyHtml, `⚠️ XNL Cyber Shield Draft Needs Review: "${draft.subject}"`, env);
             } catch (e) {
               console.error('Review notification email failed:', e.message);
             }
@@ -443,7 +443,7 @@ async function handleSubscribe(request, env) {
     await sendEmail(
       { email: subscriber.email, firstName: subscriber.firstName },
       welcomeEmailHtml(subscriber.firstName),
-      `Welcome to ShieldSmart — Your Cyber Safety Newsletter`,
+      `Welcome to XNL Cyber Shield — Join the Alliance`,
       env
     );
   } catch (e) {
@@ -812,7 +812,7 @@ async function searchWebForTopic(topic) {
       const encoded = encodeURIComponent(query);
       const url = `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
       const res = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ShieldSmart/1.0)' },
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; XNLCyberShield/1.0)' },
         cf: { cacheTtl: 300 },
       });
       if (!res.ok) continue;
@@ -972,7 +972,7 @@ async function handleAdminUrgentGenerate(request, env) {
     researchPrompt = `\n\nNOTE: Web search returned no direct results for this topic. Use the threat intel feeds below and your knowledge to write about this topic. Be transparent if details are limited.`;
   }
 
-  const system = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech.
+  const system = `You are the editor of XNL Cyber Shield, a no-nonsense cyber safety newsletter by XNL Tech.
 Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy.
 NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
 Your tone is: urgent but calm, protective, authoritative. You're breaking an important story that your readers need to know about RIGHT NOW.
@@ -984,7 +984,7 @@ CALLOUT/TIP BOX STYLING RULES (critical for email readability):
 - For tip/callout boxes, use a LEFT BORDER accent style: background #1E201E (same as card bg), with a thick 4px left border in the accent color (#BCE600 for tips, #F5A623 for warnings, #E8443A for danger). Text stays #F2F5E8.
 - NEVER use bright colors (#BCE600, #F5A623) as background fill for text areas — the white text becomes unreadable in many email clients.
 - For emphasis, use the left-border style or bold colored headings inside dark boxes instead.
-DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
+DO NOT include any XNL Cyber Shield header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
 DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
 IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks — just the raw HTML content starting directly with your first tag.`;
 
@@ -1007,7 +1007,7 @@ Structure:
 4. **What To Do Right Now** — Numbered action steps. Keep them simple and specific. Include who to report it to (with real phone numbers/websites if applicable like ic3.gov, FTC.gov/complaint, local FBI field office, etc.)
 5. **If You've Already Been Affected** — What to do if it's too late (freeze credit, change passwords, contact bank, file report, etc.)
 6. **Share This Alert** — Encourage readers to forward this to family and friends who might be vulnerable. Keep it to 1-2 sentences.
-7. **Brief sign-off** from the ShieldSmart Team at XNL Tech
+7. **Brief sign-off** from the XNL Cyber Shield Team at XNL Tech
 
 ${htmlInstructions}`;
 
@@ -1035,7 +1035,7 @@ ${htmlInstructions}`;
   let rawHtml = data.content[0].text;
   rawHtml = rawHtml.replace(/```html\s*/gi, '').replace(/```\s*/gi, '').trim();
 
-  let subject = '🚨 Urgent ShieldSmart Alert';
+  let subject = '🚨 Urgent XNL Cyber Shield Alert';
   const subjectMatch = rawHtml.match(/^SUBJECT:\s*(.+)/i);
   if (subjectMatch) {
     subject = subjectMatch[1].trim();
@@ -1117,8 +1117,8 @@ async function handleSocialGen(request, env) {
     body: JSON.stringify({
       model: 'claude-opus-4-5',
       max_tokens: 2000,
-      system: `You write social media posts for ShieldSmart, a free cyber safety newsletter by XNL Tech. The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to subscribe at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
-      messages: [{ role: 'user', content: `Generate social media posts to promote the ShieldSmart newsletter and drive subscriptions.
+      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to subscribe at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
+      messages: [{ role: 'user', content: `Generate social media posts to promote the XNL Cyber Shield newsletter and drive subscriptions.
 
 ${topicInstruction}${recentIssues}
 
@@ -1163,7 +1163,7 @@ async function generateQuestionNewsletter(env, readerQuestion, issueType, reader
   const today = new Date();
   const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  const system = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
+  const system = `You are the editor of XNL Cyber Shield, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
 Your readers are everyday people who are NOT tech savvy. 
 Tone: helpful, practical, like your patient tech-savvy nephew or niece.
 CRITICAL: All content MUST be timely and current for ${dateStr}. Reference current OS versions (Windows 11, macOS Sonoma/Sequoia, iOS 18, Android 15), real software interfaces, and up-to-date solutions for ${today.getFullYear()}. Mention specific current scams in the scam alert section. Never give outdated advice or reference old software versions.`;
@@ -1189,10 +1189,10 @@ Structure:
 4. **Bonus Tip** — One related quick tip that makes their digital life easier or safer
 5. **Scam Alert Reminder** — One sentence reminder about common scams related to this topic
 6. **Weekend Safety Reminder** — One quick safety reminder for the weekend
-7. **Warm Friday sign-off** from the ShieldSmart Team at XNL Tech
+7. **Warm Friday sign-off** from the XNL Cyber Shield Team at XNL Tech
 
 Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, muted text #7A8070. Max-width 900px.
-DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the Friday opener).
+DO NOT include any XNL Cyber Shield header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content (the Friday opener).
 DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
 IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`;
 
@@ -1277,7 +1277,7 @@ async function generateNewsletter(env, issueType) {
     console.error('Dedup fetch failed:', e.message);
   }
 
-  const baseSystem = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
+  const baseSystem = `You are the editor of XNL Cyber Shield, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
 Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy. 
 NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
 CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats and topics that are ACTIVELY relevant right now in ${today.getFullYear()}.`;
@@ -1287,7 +1287,7 @@ CALLOUT/TIP BOX STYLING RULES (critical for email readability):
 - For tip/callout boxes, use a LEFT BORDER accent style: background #1E201E (same as card bg), with a thick 4px left border in the accent color (#BCE600 for tips, #F5A623 for warnings, #E8443A for danger). Text stays #F2F5E8.
 - NEVER use bright colors (#BCE600, #F5A623) as background fill for text areas — the white text becomes unreadable in many email clients.
 - For emphasis, use the left-border style or bold colored headings inside dark boxes instead.
-DO NOT include any ShieldSmart header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
+DO NOT include any XNL Cyber Shield header, logo, branding banner, or newsletter title at the top. The header is added separately. Start directly with the content.
 DO NOT invite readers to "reply to this email" — replies are not monitored. If you want to direct them somewhere, use help@xnltech.com.
 IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks, no \`\`\`html — just the raw HTML content starting directly with your first tag.`;
 
@@ -1309,7 +1309,7 @@ Structure:
 4. **How To Spot It** — 3-5 clear bullet points with specific, concrete signs
 5. **What To Do If You Get One** — Numbered action steps (keep it simple: 3-4 steps)
 6. **Quick Win** — One 30-second thing they can do RIGHT NOW to be safer
-7. **Closing** — Warm, encouraging sign-off from "The ShieldSmart Team at XNL Tech"
+7. **Closing** — Warm, encouraging sign-off from "The XNL Cyber Shield Team at XNL Tech"
 
 ${htmlInstructions}`,
     },
@@ -1331,7 +1331,7 @@ Structure:
 5. **The Damage** — What happens if you fall for it? Real consequences (money lost, identity stolen, etc.)
 6. **Your Defense** — 4-5 specific, actionable steps to protect yourself
 7. **Who To Report It To** — Specific agencies and websites (FTC, FBI IC3, etc.)
-8. **Closing** — Empowering sign-off from "The ShieldSmart Team at XNL Tech"
+8. **Closing** — Empowering sign-off from "The XNL Cyber Shield Team at XNL Tech"
 
 ${htmlInstructions}`,
     },
@@ -1351,7 +1351,7 @@ Structure:
 3. **Why It Matters** — A brief real-world story or example showing what happens without this skill (2 paragraphs). Reference current threats from the intel if relevant.
 4. **How To Do It** — Step-by-step instructions with numbered steps. Write as if guiding someone by phone. Specify: iPhone vs Android or Windows vs Mac where relevant.
 5. **You Did It!** — Brief celebration + what this skill protects them from
-6. **Closing** from the ShieldSmart Team at XNL Tech
+6. **Closing** from the XNL Cyber Shield Team at XNL Tech
 
 ${htmlInstructions}`,
     },
@@ -1371,7 +1371,7 @@ Structure:
 3. **Quick Hits** — 3-4 additional news items, each in 2-3 sentences with a bold headline. Cover different topics (data breach, new scam, software update, policy change, etc.)
 4. **What This Means For You** — 2-3 bullet points translating the news into actionable takeaways for non-tech readers
 5. **One Thing To Do Today** — A single, simple action inspired by this week's news
-6. **Closing** from the ShieldSmart Team at XNL Tech
+6. **Closing** from the XNL Cyber Shield Team at XNL Tech
 
 ${htmlInstructions}`,
     },
@@ -1392,7 +1392,7 @@ Structure:
 4. **Bonus Tip** — One related quick tip that makes their digital life easier or safer
 5. **Scam Alert Reminder** — One sentence about a current scam from the threat intel
 6. **Weekend Safety Reminder** — One quick safety reminder for the weekend
-7. **Warm Friday sign-off** from the ShieldSmart Team at XNL Tech
+7. **Warm Friday sign-off** from the XNL Cyber Shield Team at XNL Tech
 
 ${htmlInstructions}`,
     },
@@ -1494,7 +1494,7 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
     'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk',
     monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk',
   };
-  const label = dayLabel[issueType] || 'ShieldSmart';
+  const label = dayLabel[issueType] || 'XNL Cyber Shield';
 
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -1531,9 +1531,9 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
           <tr>
             <td style="font-family:Arial,'Helvetica Neue',sans-serif;">
               <table cellpadding="0" cellspacing="0" border="0"><tr>
-                <td style="vertical-align:middle;padding-right:12px;"><img src="https://xnltech.com/logo.png" alt="ShieldSmart" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
+                <td style="vertical-align:middle;padding-right:12px;"><img src="https://xnltech.com/logo.png" alt="XNL Cyber Shield" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
                 <td style="vertical-align:middle;">
-                  <div style="font-size:22px;font-weight:800;color:#FFFFFF;font-family:Arial,'Helvetica Neue',sans-serif;">SHIELD<span style="color:#BCE600;">SMART</span></div>
+                  <div style="font-size:22px;font-weight:800;color:#FFFFFF;font-family:Arial,'Helvetica Neue',sans-serif;">XNL CYBER <span style="color:#BCE600;">SHIELD</span></div>
                   <div style="font-size:11px;color:#7A8070;text-transform:uppercase;letter-spacing:0.1em;margin-top:2px;">by XNL Tech</div>
                 </td>
               </tr></table>
@@ -1558,7 +1558,7 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
           &#128218; Missed a tip? Browse all past issues at <a href="https://xnltech.com/archive" style="color:#BCE600;text-decoration:none;font-weight:700;">xnltech.com/archive</a>
         </p>
         <p style="font-size:12px;color:#7A8070;margin:0 0 8px;font-family:Arial,sans-serif;">
-          You're receiving this because you joined ShieldSmart at <strong style="color:#F2F5E8;">xnltech.com</strong>
+          You're receiving this because you joined XNL Cyber Shield at <strong style="color:#F2F5E8;">xnltech.com</strong>
         </p>
         <p style="font-size:12px;color:#7A8070;margin:0;font-family:Arial,sans-serif;">
           <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
@@ -1624,7 +1624,7 @@ async function sendEmail(subscriber, htmlContent, subject, env) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: env.SEND_FROM || 'ShieldSmart <noreply@xnltech.com>',
+      from: env.SEND_FROM || 'XNL Cyber Shield <noreply@xnltech.com>',
       to: subscriber.email,
       subject: subject,
       html: personalizedHtml,
@@ -1647,7 +1647,7 @@ function welcomeEmailHtml(firstName) {
 <meta name="viewport" content="width=device-width" />
 <meta name="color-scheme" content="dark" />
 <meta name="supported-color-schemes" content="dark" />
-<title>Welcome to ShieldSmart</title>
+<title>Welcome to XNL Cyber Shield</title>
 </head>
 <body style="margin:0;padding:0;background-color:#111311;font-family:Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#111311" style="background-color:#111311;">
@@ -1659,9 +1659,9 @@ function welcomeEmailHtml(firstName) {
         <tr>
           <td bgcolor="#1E201E" style="background-color:#1E201E;padding:28px 32px;border-bottom:2px solid #BCE600;text-align:center;">
             <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;"><tr>
-              <td style="vertical-align:middle;padding-right:12px;"><img src="https://xnltech.com/logo.png" alt="ShieldSmart" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
+              <td style="vertical-align:middle;padding-right:12px;"><img src="https://xnltech.com/logo.png" alt="XNL Cyber Shield" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
               <td style="vertical-align:middle;">
-                <div style="font-size:24px;font-weight:800;color:#FFFFFF;font-family:Arial,sans-serif;">SHIELD<span style="color:#BCE600;">SMART</span></div>
+                <div style="font-size:24px;font-weight:800;color:#FFFFFF;font-family:Arial,sans-serif;">XNL CYBER <span style="color:#BCE600;">SHIELD</span></div>
               </td>
             </tr></table>
             <div style="font-size:11px;color:#7A8070;text-transform:uppercase;letter-spacing:0.1em;margin-top:4px;">by XNL Tech</div>
@@ -1671,7 +1671,7 @@ function welcomeEmailHtml(firstName) {
         <!-- Body -->
         <tr>
           <td bgcolor="#1E201E" style="background-color:#1E201E;padding:32px;">
-            <h2 style="color:#BCE600;font-family:Arial,sans-serif;font-size:24px;margin:0 0 16px;">Welcome to ShieldSmart, ${name}! &#127737;</h2>
+            <h2 style="color:#BCE600;font-family:Arial,sans-serif;font-size:24px;margin:0 0 16px;">Welcome to XNL Cyber Shield, ${name}! &#127737;</h2>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 16px;">
               You just took the first step toward protecting yourself online — and we're genuinely proud of you for it.
             </p>
@@ -1682,7 +1682,7 @@ function welcomeEmailHtml(firstName) {
                 <td bgcolor="#111311" style="background-color:#111311;padding:20px 24px;border-radius:8px;border-left:4px solid #BCE600;">
                   <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Our Mission</p>
                   <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0;">
-                    At <strong>XNL Tech</strong>, we believe everyone deserves to feel safe online — not just the tech-savvy. Scammers and hackers count on regular people feeling confused and overwhelmed. We're here to change that. ShieldSmart breaks down real cyber threats into <strong style="color:#BCE600;">plain English</strong> so you can protect yourself, your family, and your community — no tech degree required.
+                    At <strong>XNL Tech</strong>, we believe everyone deserves to feel safe online — not just the tech-savvy. Scammers and hackers count on regular people feeling confused and overwhelmed. We're here to change that. XNL Cyber Shield breaks down real cyber threats into <strong style="color:#BCE600;">plain English</strong> so you can protect yourself, your family, and your community — no tech degree required.
                   </p>
                 </td>
               </tr>
@@ -1738,7 +1738,7 @@ function welcomeEmailHtml(firstName) {
                 <td bgcolor="#111311" style="background-color:#111311;padding:20px 24px;border-radius:8px;border-left:4px solid #F5A623;">
                   <p style="color:#F5A623;font-family:Arial,sans-serif;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">&#128235; IMPORTANT: Don't miss your issues!</p>
                   <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:15px;line-height:1.7;margin:0 0 10px;">
-                    Email providers sometimes send new newsletters to <strong>Spam</strong> or <strong>Junk</strong>. To make sure ShieldSmart lands in your inbox every time:
+                    Email providers sometimes send new newsletters to <strong>Spam</strong> or <strong>Junk</strong>. To make sure XNL Cyber Shield lands in your inbox every time:
                   </p>
                   <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:15px;line-height:1.8;margin:0;">
                     1. <strong style="color:#BCE600;">Move this email</strong> to your primary inbox (if it's in Spam/Junk)<br/>
@@ -1760,11 +1760,11 @@ function welcomeEmailHtml(firstName) {
                   <!--[if mso]>
                   <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://xnltech.com" style="height:44px;v-text-anchor:middle;width:280px;" arcsize="18%" strokecolor="#BCE600" fillcolor="#BCE600">
                     <w:anchorlock/>
-                    <center style="color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;">Share ShieldSmart &rarr;</center>
+                    <center style="color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;">Share XNL Cyber Shield &rarr;</center>
                   </v:roundrect>
                   <![endif]-->
                   <!--[if !mso]><!-->
-                  <a href="https://xnltech.com" style="display:inline-block;background-color:#BCE600;color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:700;text-decoration:none;padding:12px 32px;border-radius:8px;">Share ShieldSmart &rarr;</a>
+                  <a href="https://xnltech.com" style="display:inline-block;background-color:#BCE600;color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:700;text-decoration:none;padding:12px 32px;border-radius:8px;">Share XNL Cyber Shield &rarr;</a>
                   <!--<![endif]-->
                   <p style="color:#7A8070;font-family:Arial,sans-serif;font-size:13px;margin:14px 0 0;">
                     Or share this link: <a href="https://xnltech.com" style="color:#BCE600;text-decoration:none;">xnltech.com</a>
@@ -1778,7 +1778,7 @@ function welcomeEmailHtml(firstName) {
             </p>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;margin:20px 0 0;">
               Stay safe out there — and help others do the same,<br/>
-              <strong>The ShieldSmart Team</strong><br/>
+              <strong>The XNL Cyber Shield Team</strong><br/>
               <span style="color:#7A8070;font-size:13px;">XNL Tech</span>
             </p>
           </td>
@@ -1788,7 +1788,7 @@ function welcomeEmailHtml(firstName) {
         <tr>
           <td bgcolor="#111311" style="background-color:#111311;padding:20px 32px;text-align:center;border-top:1px solid #2A2C2A;">
             <p style="font-size:12px;color:#7A8070;margin:0 0 8px;font-family:Arial,sans-serif;">
-              You're receiving this because you joined ShieldSmart at <strong style="color:#F2F5E8;">xnltech.com</strong>
+              You're receiving this because you joined XNL Cyber Shield at <strong style="color:#F2F5E8;">xnltech.com</strong>
             </p>
             <p style="font-size:12px;color:#7A8070;margin:0;font-family:Arial,sans-serif;">
               <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
@@ -1861,7 +1861,7 @@ async function handleUnsubscribePage(request, env) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Unsubscribe | ShieldSmart</title>
+<title>Unsubscribe | XNL Cyber Shield</title>
 <link rel="icon" type="image/png" href="/logo.png" />
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Figtree:wght@400;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -1929,7 +1929,7 @@ async function handleUnsubscribeSubmit(request, env) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Unsubscribed | ShieldSmart</title>
+<title>Unsubscribed | XNL Cyber Shield</title>
 <link rel="icon" type="image/png" href="/logo.png" />
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Figtree:wght@400;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -1945,7 +1945,7 @@ async function handleUnsubscribeSubmit(request, env) {
   <div style="font-size:2.5rem;margin-bottom:1rem;">&#10003;</div>
   <div style="font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:0.05em;color:#fff;margin-bottom:0.75rem;">You're Unsubscribed</div>
   <p style="font-size:0.88rem;color:#7A8070;line-height:1.7;margin-bottom:1.5rem;">
-    <strong style="color:#F2F5E8;">${email}</strong> has been removed from ShieldSmart. You won't receive any more emails from us.
+    <strong style="color:#F2F5E8;">${email}</strong> has been removed from XNL Cyber Shield. You won't receive any more emails from us.
   </p>
   <p style="font-size:0.8rem;color:#5A6050;margin-bottom:1.5rem;">Changed your mind? You can always re-subscribe below.</p>
   <a href="https://xnltech.com" style="display:inline-block;background:#BCE600;color:#0D0F0D;font-weight:700;font-size:0.88rem;padding:0.7rem 1.5rem;border-radius:8px;text-decoration:none;">Re-subscribe Free &rarr;</a>
@@ -1993,7 +1993,7 @@ async function handleArchiveIndex(request, env) {
     ? `<p style="color:#7A8070;text-align:center;padding:3rem 0;font-family:'Figtree',sans-serif;">No issues published yet. Check back soon!</p>`
     : issues.map(issue => {
         const date = new Date(issue.generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        const label = typeLabel[issue.issueType] || 'ShieldSmart';
+        const label = typeLabel[issue.issueType] || 'XNL Cyber Shield';
         const color = typeColor[issue.issueType] || '#BCE600';
         const id = encodeURIComponent(issue.id);
         return `
@@ -2011,7 +2011,7 @@ async function handleArchiveIndex(request, env) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ShieldSmart Archive | XNL Tech</title>
+<title>XNL Cyber Shield Archive | XNL Tech</title>
 <link rel="icon" type="image/png" href="/logo.png" />
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Figtree:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -2035,9 +2035,9 @@ async function handleArchiveIndex(request, env) {
 
 <nav class="topbar">
   <a href="https://xnltech.com" class="brand">
-    <div class="brand-shield"><img src="/logo.png" alt="ShieldSmart" width="38" height="38" /></div>
+    <div class="brand-shield"><img src="/logo.png" alt="XNL Cyber Shield" width="38" height="38" /></div>
     <div>
-      <span class="brand-name">SHIELD<span style="color:#BCE600;">SMART</span></span>
+      <span class="brand-name">XNL CYBER <span style="color:#BCE600;">SHIELD</span></span>
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
@@ -2050,7 +2050,7 @@ async function handleArchiveIndex(request, env) {
     <span style="font-size:0.68rem;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#BCE600;">Every issue, all in one place</span>
   </div>
   <div style="font-family:'Bebas Neue',sans-serif;font-size:clamp(2.5rem,5vw,3.8rem);letter-spacing:0.03em;color:#fff;line-height:0.95;margin-bottom:0.75rem;">ISSUE ARCHIVE</div>
-  <p style="color:#7A8070;font-size:0.95rem;margin-bottom:2rem;line-height:1.6;">Plain English cyber safety delivered every weekday by <strong style="color:#F2F5E8;">XNL Tech</strong>. Subscribe free to read any issue.</p>
+  <p style="color:#7A8070;font-size:0.95rem;margin-bottom:2rem;line-height:1.6;">Join the Alliance. Stay informed. Stay protected. Cyber safety delivered every weekday by <strong style="color:#F2F5E8;">XNL Tech</strong>.</p>
 
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2rem;">
     <span style="background:rgba(232,68,58,0.1);border:1px solid rgba(232,68,58,0.25);color:#E8443A;font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:4px 12px;border-radius:100px;">Mon &mdash; Threat Radar</span>
@@ -2063,7 +2063,7 @@ async function handleArchiveIndex(request, env) {
   <div>${rows}</div>
 
   <div style="margin-top:3rem;padding-top:1.5rem;border-top:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
-    <p style="font-size:0.73rem;color:#5A6050;">&copy; 2026 XNL Tech &bull; ShieldSmart Newsletter</p>
+    <p style="font-size:0.73rem;color:#5A6050;">&copy; 2026 XNL Tech &bull; XNL Cyber Shield Newsletter</p>
     <a href="https://xnltech.com" style="font-size:0.73rem;color:#7A8070;text-decoration:none;">XNLTech.com</a>
   </div>
 
@@ -2087,9 +2087,9 @@ async function handleArchiveRead(issueId, env) {
     </body></html>`, 404);
   }
 
-  const subject = meta.subject || 'ShieldSmart Issue';
+  const subject = meta.subject || 'XNL Cyber Shield Issue';
   const typeLabel = { 'threat-radar': 'Threat Radar', 'scam-spotlight': 'Scam Spotlight', 'safety-skill': 'Safety Skill', 'news-brief': 'News Brief', 'fix-it': 'Fix-It Help Desk', monday: 'Threat Radar', wednesday: 'Safety Skill', friday: 'Fix-It Help Desk' };
-  const label = typeLabel[meta.issueType] || 'ShieldSmart';
+  const label = typeLabel[meta.issueType] || 'XNL Cyber Shield';
   const date = meta.generatedAt ? new Date(meta.generatedAt).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
 
   return html(`<!DOCTYPE html>
@@ -2097,7 +2097,7 @@ async function handleArchiveRead(issueId, env) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${subject} | ShieldSmart</title>
+<title>${subject} | XNL Cyber Shield</title>
 <link rel="icon" type="image/png" href="/logo.png" />
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Figtree:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -2153,9 +2153,9 @@ async function handleArchiveRead(issueId, env) {
 
 <nav class="topbar">
   <a href="https://xnltech.com" class="brand">
-    <div class="brand-shield"><img src="/logo.png" alt="ShieldSmart" width="38" height="38" /></div>
+    <div class="brand-shield"><img src="/logo.png" alt="XNL Cyber Shield" width="38" height="38" /></div>
     <div>
-      <span class="brand-name">SHIELD<span style="color:#BCE600;">SMART</span></span>
+      <span class="brand-name">XNL CYBER <span style="color:#BCE600;">SHIELD</span></span>
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
@@ -2170,7 +2170,7 @@ async function handleArchiveRead(issueId, env) {
     <span style="font-size:0.78rem;color:#7A8070;">${date}</span>
   </div>
   <h1 style="font-family:'Bebas Neue',sans-serif;font-size:clamp(1.8rem,4vw,2.8rem);letter-spacing:0.03em;color:#fff;line-height:1;margin-bottom:0.5rem;">${subject}</h1>
-  <p style="font-size:0.85rem;color:#7A8070;">by <strong style="color:#F2F5E8;">XNL Tech</strong> &bull; ShieldSmart Newsletter</p>
+  <p style="font-size:0.85rem;color:#7A8070;">by <strong style="color:#F2F5E8;">XNL Tech</strong> &bull; XNL Cyber Shield Newsletter</p>
 </div>
 
 <!-- Preview: shows top ~420px of issue then fades out -->
@@ -2210,7 +2210,7 @@ async function handleArchiveRead(issueId, env) {
     <div class="success-state" id="popup-success">
       <div style="font-size:2rem;margin-bottom:0.75rem;">&#10003;</div>
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1.6rem;color:#fff;margin-bottom:0.5rem;">YOU'RE ALL SET!</h3>
-      <p style="font-size:0.85rem;color:#7A8070;">Welcome to ShieldSmart! Unlocking your issue now...</p>
+      <p style="font-size:0.85rem;color:#7A8070;">Welcome to XNL Cyber Shield! Unlocking your issue now...</p>
     </div>
   </div>
 </div>
@@ -2346,7 +2346,7 @@ function handleAdminPage() {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ShieldSmart Admin</title>
+  <title>XNL Cyber Shield Admin</title>
   <link rel="icon" type="image/png" href="/logo.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2495,8 +2495,8 @@ function handleAdminPage() {
 <!-- ═══ LOGIN OVERLAY ═══ -->
 <div class="login-overlay" id="loginOverlay">
   <div class="login-card">
-    <img src="/logo.png" alt="ShieldSmart" />
-    <h2><span style="color:#fff">SHIELD</span><span style="color:#BCE600">SMART</span></h2>
+    <img src="/logo.png" alt="XNL Cyber Shield" />
+    <h2><span style="color:#fff">XNL CYBER </span><span style="color:#BCE600">SHIELD</span></h2>
     <p>Admin Dashboard</p>
     <div class="field">
       <input type="password" id="secret" placeholder="Enter admin secret..." style="text-align:center;" onkeydown="if(event.key==='Enter')doLogin()" />
@@ -2509,8 +2509,8 @@ function handleAdminPage() {
 <!-- ═══ SIDEBAR ═══ -->
 <div class="sidebar" id="sidebar" style="display:none;">
   <div class="sidebar-logo">
-    <img src="/logo.png" alt="ShieldSmart" />
-    <h1><span class="s">SHIELD</span><span class="m">SMART</span><span class="sidebar-badge">ADMIN</span></h1>
+    <img src="/logo.png" alt="XNL Cyber Shield" />
+    <h1><span class="s">XNL CYBER </span><span class="m">SHIELD</span><span class="sidebar-badge">ADMIN</span></h1>
   </div>
   <div class="sidebar-nav">
     <div class="nav-item active" onclick="switchTab('dashboard')">
@@ -2538,7 +2538,7 @@ function handleAdminPage() {
       <span class="nav-icon">⏰</span><span>Cron Logs</span>
     </div>
   </div>
-  <div class="sidebar-footer">ShieldSmart &copy; XNL Tech</div>
+  <div class="sidebar-footer">XNL Cyber Shield &copy; XNL Tech</div>
 </div>
 
 <!-- ═══ MAIN CONTENT ═══ -->
@@ -2740,7 +2740,7 @@ function handleAdminPage() {
         <div class="row">
           <div class="field">
             <label for="customSubject">Subject Line</label>
-            <input type="text" id="customSubject" placeholder="e.g. Special Announcement from ShieldSmart" />
+            <input type="text" id="customSubject" placeholder="e.g. Special Announcement from XNL Cyber Shield" />
           </div>
           <div class="field">
             <label for="customType">Issue Type</label>
@@ -2755,7 +2755,7 @@ function handleAdminPage() {
         </div>
         <div class="field">
           <label>Intro Paragraph <span style="color:#5A6050;font-weight:400;">(optional)</span></label>
-          <textarea id="customIntro" rows="3" placeholder="Hey ShieldSmart readers! This week we have something special..."></textarea>
+          <textarea id="customIntro" rows="3" placeholder="Hey XNL Alliance! This week we have something special..."></textarea>
         </div>
         <label style="margin-bottom:10px;">Sections</label>
         <div id="sectionList"></div>
@@ -2786,7 +2786,7 @@ function handleAdminPage() {
     <div class="tab-view" id="view-social">
       <div class="card">
         <h3 style="margin-bottom:6px;">Social Media Post Generator</h3>
-        <p style="color:#7A8070;font-size:13px;margin-bottom:18px;">Generate ready-to-paste posts for Facebook and X to promote ShieldSmart.</p>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:18px;">Generate ready-to-paste posts for Facebook and X to promote XNL Cyber Shield.</p>
         <div class="field">
           <label for="socialTopic">Topic / Angle (optional)</label>
           <input type="text" id="socialTopic" placeholder='e.g. "phone scams targeting seniors" — leave blank for AI to pick' />
@@ -3380,7 +3380,7 @@ async function loadIssues() {
     }
     el.innerHTML = data.issues.map(function(issue) {
       var d = new Date(issue.generatedAt).toLocaleString();
-      var label = draftTypeLabel[issue.issueType] || 'ShieldSmart';
+      var label = draftTypeLabel[issue.issueType] || 'XNL Cyber Shield';
       var color = draftTypeColor[issue.issueType] || '#BCE600';
       return '<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #1E201E;">'
         + makeBadge(label, color)
@@ -3712,8 +3712,8 @@ function handleLandingPage() {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ShieldSmart | Cyber Safety Newsletter by XNL Tech</title>
-  <meta name="description" content="Plain-English cyber safety tips every weekday. No jargon. Real protection for real people." />
+  <title>XNL Cyber Shield | Cyber Safety Newsletter by XNL Tech</title>
+  <meta name="description" content="Join the Alliance. Stay informed. Stay protected. Plain-English cyber safety delivered every weekday by XNL Tech." />
   <link rel="icon" type="image/png" href="/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -4273,9 +4273,9 @@ function handleLandingPage() {
 
 <nav class="topbar">
   <a href="#" class="brand">
-    <div class="brand-shield"><img src="/logo.png" alt="ShieldSmart" width="38" height="38" /></div>
+    <div class="brand-shield"><img src="/logo.png" alt="XNL Cyber Shield" width="38" height="38" /></div>
     <div>
-      <span class="brand-name">SHIELD<span style="color:#BCE600;">SMART</span></span>
+      <span class="brand-name">XNL CYBER <span style="color:#BCE600;">SHIELD</span></span>
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
@@ -4288,7 +4288,7 @@ function handleLandingPage() {
     <div class="left-inner">
       <div class="eyebrow">
         <span class="eyebrow-dot"></span>
-        Free Cyber Safety Newsletter &mdash; 5&times; a week
+        XNL Cyber Shield &mdash; Free Cyber Safety Newsletter
       </div>
 
       <h1>
@@ -4298,7 +4298,7 @@ function handleLandingPage() {
       </h1>
 
       <p class="hero-desc">
-        Real-time cybersecurity alerts and practical tips delivered to your inbox every weekday &mdash;
+        Join the Alliance. Stay informed. Stay protected. Real-time cybersecurity alerts and practical tips delivered to your inbox every weekday &mdash;
         no tech degree required. Powered by live threat intelligence, built for everyday people by <strong style="color:var(--off)">XNL Tech</strong>.
       </p>
 
@@ -4369,7 +4369,7 @@ function handleLandingPage() {
       <div id="form-wrapper">
         <div class="form-headline">JOIN FOR FREE</div>
         <p class="form-sub">
-          5 issues a week. Real threats. Plain English. Zero jargon.
+          Join the Alliance. 5 issues a week. Real threats. Plain English.
           <span class="free-badge">Always Free</span>
         </p>
 
@@ -4431,7 +4431,7 @@ function handleLandingPage() {
       <div class="success-screen" id="success-screen">
         <div class="success-icon">&#128737;</div>
         <h3>YOU'RE ALL SET!</h3>
-        <p>Welcome to ShieldSmart. Check your inbox &mdash; a welcome message is on its way.<br/><br/>
+        <p>Welcome to the XNL Alliance. Check your inbox &mdash; a welcome message is on its way.<br/><br/>
         Your first issue arrives <strong style="color:var(--off)">tomorrow morning.</strong> We send every weekday.</p>
         <div style="background:rgba(188,230,0,0.08);border:1px solid rgba(188,230,0,0.25);border-radius:10px;padding:16px 20px;margin-top:18px;text-align:left;font-size:0.92rem;line-height:1.6;color:var(--muted);">
           <strong style="color:#BCE600;">&#128235; Don't see it?</strong> Check your <strong style="color:var(--off)">Spam</strong> or <strong style="color:var(--off)">Junk</strong> folder &mdash; sometimes new senders land there. To make sure you never miss an issue:<br/>
@@ -4446,7 +4446,7 @@ function handleLandingPage() {
 </main>
 
 <footer>
-  <div>&copy; 2026 <strong style="color:var(--muted)">XNL Tech</strong> &bull; ShieldSmart Newsletter</div>
+  <div>&copy; 2026 <strong style="color:var(--muted)">XNL Tech</strong> &bull; XNL Cyber Shield Newsletter</div>
   <div style="display:flex;gap:1.4rem;flex-wrap:wrap;justify-content:center;">
     <a href="#" onclick="openModal('privacy-modal');return false;">Privacy Policy</a>
     <a href="/archive" target="_blank">Archive</a>
@@ -4463,14 +4463,14 @@ function handleLandingPage() {
     <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0;">
       <div>
         <div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;letter-spacing:0.05em;color:#fff;">Privacy Policy</div>
-        <div style="font-size:0.7rem;color:#7A8070;margin-top:1px;">ShieldSmart &bull; XNL Tech &bull; Effective: March 2026</div>
+        <div style="font-size:0.7rem;color:#7A8070;margin-top:1px;">XNL Cyber Shield &bull; XNL Tech &bull; Effective: March 2026</div>
       </div>
       <button onclick="closeModal('privacy-modal')" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#F2F5E8;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center;">&times;</button>
     </div>
     <!-- Modal body -->
     <div style="overflow-y:auto;padding:1.5rem;font-size:0.85rem;color:#B0B8A8;line-height:1.8;">
 
-      <p style="margin-bottom:1.25rem;">This Privacy Policy describes how <strong style="color:#F2F5E8;">XNL Tech</strong> ("we," "us," or "our") collects, uses, and protects information you provide when subscribing to the ShieldSmart newsletter.</p>
+      <p style="margin-bottom:1.25rem;">This Privacy Policy describes how <strong style="color:#F2F5E8;">XNL Tech</strong> ("we," "us," or "our") collects, uses, and protects information you provide when subscribing to the XNL Cyber Shield newsletter.</p>
 
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">1. Information We Collect</h3>
       <p style="margin-bottom:1.25rem;">We collect your first name, last name, and email address when you subscribe. We do not collect payment information, passwords, or sensitive personal data.</p>
@@ -4478,7 +4478,7 @@ function handleLandingPage() {
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">2. How We Use Your Information</h3>
       <p style="margin-bottom:0.5rem;">We use your information solely to:</p>
       <ul style="margin:0 0 1.25rem 1.25rem;">
-        <li>Send you the ShieldSmart newsletter (Monday through Friday)</li>
+        <li>Send you the XNL Cyber Shield newsletter (Monday through Friday)</li>
         <li>Send you a welcome email upon subscribing</li>
         <li>Respond to questions or support requests you send us</li>
       </ul>
@@ -4491,7 +4491,7 @@ function handleLandingPage() {
       <p style="margin-bottom:1.25rem;">Your subscriber data is stored securely using Cloudflare's infrastructure, which is encrypted at rest and in transit. We retain your data only as long as you remain subscribed.</p>
 
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">5. Email Communications</h3>
-      <p style="margin-bottom:1.25rem;">By subscribing you consent to receive the ShieldSmart newsletter. Every email includes an unsubscribe link. You may opt out at any time and your data will be removed within 7 days of your request.</p>
+      <p style="margin-bottom:1.25rem;">By subscribing you consent to receive the XNL Cyber Shield newsletter. Every email includes an unsubscribe link. You may opt out at any time and your data will be removed within 7 days of your request.</p>
 
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">6. Third-Party Services</h3>
       <p style="margin-bottom:1.25rem;">We use <strong style="color:#F2F5E8;">Resend</strong> to deliver emails and <strong style="color:#F2F5E8;">Cloudflare</strong> to host our infrastructure. These services may process your email address solely for delivery purposes. They are bound by their own privacy policies.</p>
@@ -4507,7 +4507,7 @@ function handleLandingPage() {
       <p style="margin-bottom:1.25rem;">To exercise any of these rights, email us at <a href="mailto:help@xnltech.com" style="color:#BCE600;">help@xnltech.com</a>.</p>
 
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">8. Children's Privacy</h3>
-      <p style="margin-bottom:1.25rem;">ShieldSmart is not directed at children under 13. We do not knowingly collect personal information from anyone under 13 years of age.</p>
+      <p style="margin-bottom:1.25rem;">XNL Cyber Shield is not directed at children under 13. We do not knowingly collect personal information from anyone under 13 years of age.</p>
 
       <h3 style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:0.06em;color:#BCE600;margin-bottom:0.5rem;">9. Changes to This Policy</h3>
       <p style="margin-bottom:1.25rem;">We may update this policy from time to time. We will notify subscribers of material changes via email. Continued subscription after changes constitutes acceptance.</p>
@@ -4681,7 +4681,7 @@ async function fetchThreatIntel(env) {
   const results = await Promise.allSettled(
     THREAT_FEEDS.map(async (feed) => {
       const resp = await fetch(feed.url, {
-        headers: { 'User-Agent': 'ShieldSmart-Newsletter/1.0' },
+        headers: { 'User-Agent': 'XNLCyberShield/1.0' },
         signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -4922,7 +4922,7 @@ async function runClaudeQA(draft, env) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2000,
-      system: `You are a newsletter QA editor for ShieldSmart, a cybersecurity newsletter for non-tech-savvy everyday people. Your job is to proofread and check quality. Be strict but fair.`,
+      system: `You are a newsletter QA editor for XNL Cyber Shield, a cybersecurity newsletter for non-tech-savvy everyday people. Your job is to proofread and check quality. Be strict but fair.`,
       messages: [{
         role: 'user',
         content: `Review this newsletter draft. Check for:
@@ -4999,7 +4999,7 @@ async function autoFixDraft(draft, qaResult, env) {
 async function sendStatusReport(env, report) {
   const to = 'help@xnltech.com';
   const overallStatus = report.failed > 0 ? (report.sent === 0 ? 'FAIL' : 'PARTIAL FAIL') : 'SUCCESS';
-  const subject = `ShieldSmart Daily Report: ${overallStatus} — "${report.subject}"`;
+  const subject = `XNL Cyber Shield Daily Report: ${overallStatus} — "${report.subject}"`;
 
   const issueTypeLabels = {
     'threat-radar': 'Monday Threat Radar',
@@ -5046,7 +5046,7 @@ async function sendStatusReport(env, report) {
 <table width="100%" cellpadding="0" cellspacing="0" bgcolor="#111311"><tr><td align="center" style="padding:24px;">
 <table width="600" cellpadding="0" cellspacing="0" bgcolor="#1E201E" style="max-width:600px;width:100%;border-radius:12px;">
   <tr><td style="padding:24px;border-bottom:2px solid #BCE600;">
-    <div style="font-size:20px;font-weight:800;color:#FFF;">SHIELD<span style="color:#BCE600;">SMART</span> <span style="font-size:12px;color:#F5A623;font-weight:700;background:#F5A62320;padding:2px 8px;border-radius:4px;">DAILY REPORT</span></div>
+    <div style="font-size:20px;font-weight:800;color:#FFF;">XNL CYBER <span style="color:#BCE600;">SHIELD</span> <span style="font-size:12px;color:#F5A623;font-weight:700;background:#F5A62320;padding:2px 8px;border-radius:4px;">DAILY REPORT</span></div>
   </td></tr>
   <tr><td style="padding:20px 24px;">
     <div style="font-size:28px;font-weight:700;color:${overallStatus === 'SUCCESS' ? '#BCE600' : '#E8443A'};">${overallStatus}</div>
@@ -5091,10 +5091,10 @@ async function generateTweet(newsletterSubject, issueType, env) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
-      system: `You write viral tweets for ShieldSmart, a free cybersecurity newsletter for everyday people by XNL Tech. Tone: urgent but friendly, relatable. Goal: drive subscriptions to xnltech.com. Never use hashtags excessively — max 1-2.`,
+      system: `You write viral tweets for XNL Cyber Shield, a free cybersecurity newsletter for everyday people by XNL Tech. Tone: urgent but friendly, relatable. Goal: drive subscriptions to xnltech.com. Never use hashtags excessively — max 1-2.`,
       messages: [{
         role: 'user',
-        content: `Write a single tweet (max 270 characters) promoting today's ShieldSmart newsletter.
+        content: `Write a single tweet (max 270 characters) promoting today's XNL Cyber Shield newsletter.
 
 Newsletter subject: "${newsletterSubject}"
 Issue type: ${issueType}
@@ -5241,7 +5241,7 @@ async function generateGrowthTip(growth, env) {
         system: 'You give brief, actionable newsletter growth tips. One sentence only.',
         messages: [{
           role: 'user',
-          content: `ShieldSmart newsletter stats: ${growth.totalActive} active subscribers, ${growth.netChange >= 0 ? '+' : ''}${growth.netChange} today, ${growth.weeklyChange !== undefined ? (growth.weeklyChange >= 0 ? '+' : '') + growth.weeklyChange + ' this week' : 'no weekly data yet'}. Give one specific, actionable growth tip.`
+          content: `XNL Cyber Shield newsletter stats: ${growth.totalActive} active subscribers, ${growth.netChange >= 0 ? '+' : ''}${growth.netChange} today, ${growth.weeklyChange !== undefined ? (growth.weeklyChange >= 0 ? '+' : '') + growth.weeklyChange + ' this week' : 'no weekly data yet'}. Give one specific, actionable growth tip.`
         }],
       }),
     });
