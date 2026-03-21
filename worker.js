@@ -973,9 +973,9 @@ async function handleAdminUrgentGenerate(request, env) {
   }
 
   const system = `You are the editor of XNL Cyber Shield, a no-nonsense cyber safety newsletter by XNL Tech.
-Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy.
+Your readers are the "XNL Alliance" — everyday people (seniors, parents, non-tech workers) who are NOT tech savvy. Always address them as "Alliance members" or "the Alliance" — NEVER "subscribers" or "readers." Example: "Alliance, this is urgent —"
 NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
-Your tone is: urgent but calm, protective, authoritative. You're breaking an important story that your readers need to know about RIGHT NOW.
+Your tone is: urgent but calm, protective, authoritative. You're breaking an important story that your Alliance members need to know about RIGHT NOW.
 CRITICAL: All content MUST be timely and current for ${dateStr}. This is an URGENT ALERT newsletter.
 You have been given REAL web search results below. You MUST base your newsletter on the ACTUAL facts from those articles. Do NOT invent details.`;
 
@@ -1006,7 +1006,7 @@ Structure:
 3. **How to Spot It** — Clear warning signs as a bulleted list. Be specific about what to look for (exact phrases scammers use, types of calls/texts, etc.)
 4. **What To Do Right Now** — Numbered action steps. Keep them simple and specific. Include who to report it to (with real phone numbers/websites if applicable like ic3.gov, FTC.gov/complaint, local FBI field office, etc.)
 5. **If You've Already Been Affected** — What to do if it's too late (freeze credit, change passwords, contact bank, file report, etc.)
-6. **Share This Alert** — Encourage readers to forward this to family and friends who might be vulnerable. Keep it to 1-2 sentences.
+6. **Share This Alert** — Encourage Alliance members to forward this to family and friends who might be vulnerable. Invite them to join the Alliance at xnltech.com. Keep it to 1-2 sentences.
 7. **Brief sign-off** from the XNL Cyber Shield Team at XNL Tech
 
 ${htmlInstructions}`;
@@ -1117,15 +1117,15 @@ async function handleSocialGen(request, env) {
     body: JSON.stringify({
       model: 'claude-opus-4-5',
       max_tokens: 2000,
-      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to subscribe at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
-      messages: [{ role: 'user', content: `Generate social media posts to promote the XNL Cyber Shield newsletter and drive subscriptions.
+      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. Our subscriber community is called "the XNL Alliance." The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to "join the Alliance" at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
+      messages: [{ role: 'user', content: `Generate social media posts to promote XNL Cyber Shield and get people to join the XNL Alliance.
 
 ${topicInstruction}${recentIssues}
 
 Generate EXACTLY this output format (plain text, no markdown):
 
 FACEBOOK:
-[A Facebook post, 2-4 short paragraphs. Hook with a scary/relatable scenario. Include 1-2 emojis per paragraph. End with a clear CTA to subscribe at xnltech.com. Can be slightly longer and conversational.]
+[A Facebook post, 2-4 short paragraphs. Hook with a scary/relatable scenario. Include 1-2 emojis per paragraph. End with a clear CTA to join the Alliance at xnltech.com. Can be slightly longer and conversational.]
 
 TWITTER:
 [A Twitter/X post, max 280 characters. Punchy, urgent, with a CTA link to xnltech.com. Include 1-2 relevant emojis.]
@@ -1164,13 +1164,13 @@ async function generateQuestionNewsletter(env, readerQuestion, issueType, reader
   const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   const system = `You are the editor of XNL Cyber Shield, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
-Your readers are everyday people who are NOT tech savvy. 
+Your readers are the "XNL Alliance" — everyday people who are NOT tech savvy. Always address them as "Alliance members" or "the Alliance" — NEVER "subscribers" or "readers."
 Tone: helpful, practical, like your patient tech-savvy nephew or niece.
 CRITICAL: All content MUST be timely and current for ${dateStr}. Reference current OS versions (Windows 11, macOS Sonoma/Sequoia, iOS 18, Android 15), real software interfaces, and up-to-date solutions for ${today.getFullYear()}. Mention specific current scams in the scam alert section. Never give outdated advice or reference old software versions.`;
 
   const nameInstruction = readerName
     ? `The reader's first name is ${readerName}. You may use their first name when presenting the question (e.g., "${readerName} wrote in asking..."). Only use their first name — never invent a last name or location.`
-    : `Do NOT use any name — present it anonymously: "One of our readers wrote in asking..."`;
+    : `Do NOT use any name — present it anonymously: "One of our Alliance members wrote in asking..."`;
 
   const prompt = `Today's date is ${dateStr}. A real reader submitted this question to help@xnltech.com:
 
@@ -1278,7 +1278,7 @@ async function generateNewsletter(env, issueType) {
   }
 
   const baseSystem = `You are the editor of XNL Cyber Shield, a no-nonsense cyber safety newsletter by XNL Tech (PromptMechanics.org is an affiliated partner, not part of XNL Tech). 
-Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy. 
+Your readers are the "XNL Alliance" — everyday people (seniors, parents, non-tech workers) who are NOT tech savvy. Always address them as "Alliance members" or "the Alliance" — NEVER "subscribers" or "readers." Example openers: "Hey Alliance," or "Alliance, listen up —"
 NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
 CRITICAL: All content MUST be timely and current for ${dateStr}. Write about threats and topics that are ACTIVELY relevant right now in ${today.getFullYear()}.`;
 
@@ -1369,7 +1369,7 @@ Structure:
 1. **Opener** (1-2 sentences — "Here's your Thursday security briefing")
 2. **Top Story** — The biggest cybersecurity news item this week, explained in 2-3 short paragraphs. Use the threat intel above.
 3. **Quick Hits** — 3-4 additional news items, each in 2-3 sentences with a bold headline. Cover different topics (data breach, new scam, software update, policy change, etc.)
-4. **What This Means For You** — 2-3 bullet points translating the news into actionable takeaways for non-tech readers
+4. **What This Means For You** — 2-3 bullet points translating the news into actionable takeaways for Alliance members
 5. **One Thing To Do Today** — A single, simple action inspired by this week's news
 6. **Closing** from the XNL Cyber Shield Team at XNL Tech
 
@@ -1558,7 +1558,7 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
           &#128218; Missed a tip? Browse all past issues at <a href="https://xnltech.com/archive" style="color:#BCE600;text-decoration:none;font-weight:700;">xnltech.com/archive</a>
         </p>
         <p style="font-size:12px;color:#7A8070;margin:0 0 8px;font-family:Arial,sans-serif;">
-          You're receiving this because you joined XNL Cyber Shield at <strong style="color:#F2F5E8;">xnltech.com</strong>
+          You're receiving this because you joined the XNL Alliance at <strong style="color:#F2F5E8;">xnltech.com</strong>
         </p>
         <p style="font-size:12px;color:#7A8070;margin:0;font-family:Arial,sans-serif;">
           <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
@@ -1647,7 +1647,7 @@ function welcomeEmailHtml(firstName) {
 <meta name="viewport" content="width=device-width" />
 <meta name="color-scheme" content="dark" />
 <meta name="supported-color-schemes" content="dark" />
-<title>Welcome to XNL Cyber Shield</title>
+<title>Welcome to the XNL Alliance</title>
 </head>
 <body style="margin:0;padding:0;background-color:#111311;font-family:Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#111311" style="background-color:#111311;">
@@ -1671,9 +1671,9 @@ function welcomeEmailHtml(firstName) {
         <!-- Body -->
         <tr>
           <td bgcolor="#1E201E" style="background-color:#1E201E;padding:32px;">
-            <h2 style="color:#BCE600;font-family:Arial,sans-serif;font-size:24px;margin:0 0 16px;">Welcome to XNL Cyber Shield, ${name}! &#127737;</h2>
+            <h2 style="color:#BCE600;font-family:Arial,sans-serif;font-size:24px;margin:0 0 16px;">Welcome to the XNL Alliance, ${name}! &#127737;</h2>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 16px;">
-              You just took the first step toward protecting yourself online — and we're genuinely proud of you for it.
+              You're officially part of the <strong style="color:#BCE600;">XNL Alliance</strong> — a growing community of everyday people who refuse to be easy targets. We're genuinely proud of you for taking this step.
             </p>
 
             <!-- Mission -->
@@ -1693,7 +1693,7 @@ function welcomeEmailHtml(firstName) {
               <strong style="color:#BCE600;">This newsletter is just the beginning.</strong>
             </p>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 20px;">
-              We're building a community of people who look out for each other. The more of us who know how to spot scams, lock down our accounts, and stay safe — the harder we make it for the bad guys. Your inbox is our starting point, but the real goal is a world where nobody falls for these tricks.
+              The XNL Alliance is a community of people who look out for each other. The more of us who know how to spot scams, lock down our accounts, and stay safe — the harder we make it for the bad guys. Your inbox is our starting point, but the real goal is a world where nobody falls for these tricks.
             </p>
 
             <!-- Schedule -->
@@ -1753,9 +1753,9 @@ function welcomeEmailHtml(firstName) {
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
               <tr>
                 <td bgcolor="#222522" style="background-color:#222522;padding:24px;border-radius:8px;text-align:center;border:1px solid #3A3D3A;">
-                  <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:20px;font-weight:700;margin:0 0 8px;">&#128149; Help Someone You Care About</p>
+                  <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:20px;font-weight:700;margin:0 0 8px;">&#128149; Grow the Alliance</p>
                   <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 16px;">
-                    Think of one person — a parent, a friend, a neighbor — who could use a little help staying safe online. Forward this email to them, or share the link below. It's free, and it could save them from a scam.
+                    Think of one person — a parent, a friend, a neighbor — who could use a little help staying safe online. Invite them to join the XNL Alliance. It's free, and it could save them from a scam.
                   </p>
                   <!--[if mso]>
                   <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://xnltech.com" style="height:44px;v-text-anchor:middle;width:280px;" arcsize="18%" strokecolor="#BCE600" fillcolor="#BCE600">
@@ -1777,7 +1777,7 @@ function welcomeEmailHtml(firstName) {
               Questions? Reply to this email or write us at <a href="mailto:help@xnltech.com" style="color:#BCE600;text-decoration:none;">help@xnltech.com</a>
             </p>
             <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;margin:20px 0 0;">
-              Stay safe out there — and help others do the same,<br/>
+              Stay safe out there, Alliance member — and help others do the same,<br/>
               <strong>The XNL Cyber Shield Team</strong><br/>
               <span style="color:#7A8070;font-size:13px;">XNL Tech</span>
             </p>
@@ -1788,7 +1788,7 @@ function welcomeEmailHtml(firstName) {
         <tr>
           <td bgcolor="#111311" style="background-color:#111311;padding:20px 32px;text-align:center;border-top:1px solid #2A2C2A;">
             <p style="font-size:12px;color:#7A8070;margin:0 0 8px;font-family:Arial,sans-serif;">
-              You're receiving this because you joined XNL Cyber Shield at <strong style="color:#F2F5E8;">xnltech.com</strong>
+              You're receiving this because you joined the XNL Alliance at <strong style="color:#F2F5E8;">xnltech.com</strong>
             </p>
             <p style="font-size:12px;color:#7A8070;margin:0;font-family:Arial,sans-serif;">
               <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
@@ -1945,10 +1945,10 @@ async function handleUnsubscribeSubmit(request, env) {
   <div style="font-size:2.5rem;margin-bottom:1rem;">&#10003;</div>
   <div style="font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:0.05em;color:#fff;margin-bottom:0.75rem;">You're Unsubscribed</div>
   <p style="font-size:0.88rem;color:#7A8070;line-height:1.7;margin-bottom:1.5rem;">
-    <strong style="color:#F2F5E8;">${email}</strong> has been removed from XNL Cyber Shield. You won't receive any more emails from us.
+    <strong style="color:#F2F5E8;">${email}</strong> has been removed from the XNL Alliance. You won't receive any more emails from us.
   </p>
   <p style="font-size:0.8rem;color:#5A6050;margin-bottom:1.5rem;">Changed your mind? You can always re-subscribe below.</p>
-  <a href="https://xnltech.com" style="display:inline-block;background:#BCE600;color:#0D0F0D;font-weight:700;font-size:0.88rem;padding:0.7rem 1.5rem;border-radius:8px;text-decoration:none;">Re-subscribe Free &rarr;</a>
+  <a href="https://xnltech.com" style="display:inline-block;background:#BCE600;color:#0D0F0D;font-weight:700;font-size:0.88rem;padding:0.7rem 1.5rem;border-radius:8px;text-decoration:none;">Rejoin the Alliance &rarr;</a>
 </div>
 </body>
 </html>`);
@@ -2041,7 +2041,7 @@ async function handleArchiveIndex(request, env) {
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
-  <a href="https://xnltech.com" class="nav-cta">Subscribe Free &rarr;</a>
+  <a href="https://xnltech.com" class="nav-cta">Join the Alliance &rarr;</a>
 </nav>
 
 <div style="position:relative;z-index:1;max-width:960px;margin:0 auto;padding:5rem 1.5rem 3rem;">
@@ -2159,7 +2159,7 @@ async function handleArchiveRead(issueId, env) {
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
-  <a href="https://xnltech.com" class="nav-cta">Subscribe Free &rarr;</a>
+  <a href="https://xnltech.com" class="nav-cta">Join the Alliance &rarr;</a>
 </nav>
 
 <!-- Issue header -->
@@ -2186,7 +2186,7 @@ async function handleArchiveRead(issueId, env) {
   <div class="gate-card">
     <div style="font-size:1.75rem;margin-bottom:0.75rem;">&#128274;</div>
     <h3>Read the Full Issue</h3>
-    <p>Already subscribed? Enter your email to unlock. Not subscribed yet? Enter your email to join free and read instantly.</p>
+    <p>Already in the Alliance? Enter your email to unlock. Not a member yet? Enter your email to join the Alliance and read instantly.</p>
     <input type="email" id="gate-email" class="gate-input" placeholder="your@email.com" />
     <div id="gate-msg" style="font-size:0.75rem;color:#E8443A;margin-bottom:8px;display:none;"></div>
     <button class="gate-btn" onclick="gateAccess()">Unlock Full Issue &rarr;</button>
@@ -2201,7 +2201,7 @@ async function handleArchiveRead(issueId, env) {
     <div id="popup-form">
       <div class="popup-icon">&#128737;</div>
       <h3>Want to Read More?</h3>
-      <p>Already subscribed? Enter your email to unlock instantly. New here? Subscribe free — it only takes a second.</p>
+      <p>Already in the Alliance? Enter your email to unlock instantly. New here? Join the Alliance — it only takes a second.</p>
       <input type="email" id="popup-email" class="gate-input" placeholder="your@email.com" />
       <div id="popup-msg" style="font-size:0.75rem;color:#E8443A;margin-bottom:8px;display:none;"></div>
       <button class="gate-btn" onclick="popupAccess()">Unlock Full Issue &rarr;</button>
@@ -4367,7 +4367,7 @@ function handleLandingPage() {
       </div>
 
       <div id="form-wrapper">
-        <div class="form-headline">JOIN FOR FREE</div>
+        <div class="form-headline">JOIN THE ALLIANCE</div>
         <p class="form-sub">
           Join the Alliance. 5 issues a week. Real threats. Plain English.
           <span class="free-badge">Always Free</span>
@@ -4414,7 +4414,7 @@ function handleLandingPage() {
         </div>
 
         <button class="submit-btn" id="submit-btn" onclick="handleJoin()">
-          Stay Informed &mdash; It's Free &nbsp;&#8594;
+          Join the Alliance &nbsp;&#8594;
         </button>
 
         <p class="terms-note">
@@ -4424,7 +4424,7 @@ function handleLandingPage() {
 
         <div class="sub-count">
           <span style="font-size:1rem;">&#11088;</span>
-          <span class="sub-text"><strong style="color:var(--lime)">Founding subscriber</strong> &mdash; get in early</span>
+          <span class="sub-text"><strong style="color:var(--lime)">Founding Alliance member</strong> &mdash; get in early</span>
         </div>
       </div>
 
@@ -4572,7 +4572,7 @@ function handleLandingPage() {
     if (!email || !email.includes('@')) { shake('email'); return; }
 
     const btn = document.getElementById('submit-btn');
-    btn.textContent = 'Signing you up\u2026';
+    btn.textContent = 'Joining the Alliance\u2026';
     btn.disabled = true;
 
     try {
@@ -5091,7 +5091,7 @@ async function generateTweet(newsletterSubject, issueType, env) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
-      system: `You write viral tweets for XNL Cyber Shield, a free cybersecurity newsletter for everyday people by XNL Tech. Tone: urgent but friendly, relatable. Goal: drive subscriptions to xnltech.com. Never use hashtags excessively — max 1-2.`,
+      system: `You write viral tweets for XNL Cyber Shield, a free cybersecurity newsletter by XNL Tech. Our subscribers are called "the XNL Alliance." Tone: urgent but friendly, relatable. Goal: get people to "join the Alliance" at xnltech.com. Never use hashtags excessively — max 1-2.`,
       messages: [{
         role: 'user',
         content: `Write a single tweet (max 270 characters) promoting today's XNL Cyber Shield newsletter.
@@ -5102,7 +5102,7 @@ Issue type: ${issueType}
 The tweet should:
 - Hook with the threat/topic from the subject
 - Create urgency without fearmongering
-- End with a CTA to subscribe at xnltech.com
+- End with a CTA to join the Alliance at xnltech.com
 - Be under 270 characters (leave room for platform formatting)
 
 Output ONLY the tweet text. No quotes, no labels, no explanation.`
