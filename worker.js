@@ -802,6 +802,140 @@ async function handleAdminTriggerGenerate(request, env) {
   });
 }
 
+// ─── WEB SEARCH: Google News RSS + article content extraction ───────────────
+async function searchWebForTopic(topic) {
+  const results = [];
+  const searchQueries = [topic, topic + ' scam warning', topic + ' cybersecurity'];
+
+  for (const query of searchQueries) {
+    try {
+      const encoded = encodeURIComponent(query);
+      const url = `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ShieldSmart/1.0)' },
+        cf: { cacheTtl: 300 },
+      });
+      if (!res.ok) continue;
+      const xml = await res.text();
+
+      const items = [];
+      const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+      let match;
+      while ((match = itemRegex.exec(xml)) !== null && items.length < 8) {
+        const block = match[1];
+        const title = (block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+        const link = (block.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
+        const pubDate = (block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
+        const source = (block.match(/<source[^>]*>([\s\S]*?)<\/source>/) || [])[1] || '';
+        const desc = (block.match(/<description>([\s\S]*?)<\/description>/) || [])[1] || '';
+
+        const cleanTitle = title.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, '').trim();
+        const cleanDesc = desc.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+        const cleanLink = link.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+        const cleanSource = source.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+
+        if (cleanTitle && !results.some(r => r.title === cleanTitle)) {
+          items.push({ title: cleanTitle, link: cleanLink, source: cleanSource, date: pubDate, description: cleanDesc });
+        }
+      }
+      results.push(...items);
+    } catch (e) {
+      console.error('Google News search failed for:', query, e.message);
+    }
+  }
+
+  // Deduplicate by title
+  const seen = new Set();
+  return results.filter(r => {
+    if (seen.has(r.title)) return false;
+    seen.add(r.title);
+    return true;
+  }).slice(0, 12);
+}
+
+async function fetchArticleContent(url, maxLen) {
+  maxLen = maxLen || 3000;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      redirect: 'follow',
+      cf: { cacheTtl: 600 },
+    });
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('text/html')) return null;
+
+    const html = await res.text();
+
+    // Try to extract article body text
+    let text = html;
+
+    // Remove script, style, nav, header, footer, aside tags and their content
+    text = text.replace(/<(script|style|nav|header|footer|aside|noscript|iframe)[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+    // Remove all remaining HTML tags
+    text = text.replace(/<[^>]+>/g, ' ');
+    // Decode common entities
+    text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ');
+    // Collapse whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+
+    // Try to find the meatiest section (skip first 200 chars which is usually nav/ads)
+    if (text.length > 400) {
+      text = text.substring(150);
+    }
+
+    return text.substring(0, maxLen);
+  } catch (e) {
+    console.error('Article fetch failed:', url, e.message);
+    return null;
+  }
+}
+
+async function researchTopic(topic) {
+  console.log('Searching web for:', topic);
+  const articles = await searchWebForTopic(topic);
+  console.log('Found', articles.length, 'news articles');
+
+  if (articles.length === 0) {
+    return { articles: [], articleContent: '', sourcesSearched: 0 };
+  }
+
+  // Fetch content from top 4 articles for deeper context
+  const contentResults = [];
+  const toFetch = articles.slice(0, 4);
+  const fetches = toFetch.map(async (article) => {
+    // Google News links redirect — follow them
+    const content = await fetchArticleContent(article.link, 2500);
+    if (content && content.length > 200) {
+      contentResults.push({ title: article.title, source: article.source, content });
+    }
+  });
+
+  await Promise.all(fetches);
+
+  // Format for the AI prompt
+  let articleList = articles.map((a, i) => {
+    const dateStr = a.date ? new Date(a.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    return `${i + 1}. "${a.title}" — ${a.source}${dateStr ? ' (' + dateStr + ')' : ''}\n   ${a.description || ''}`;
+  }).join('\n\n');
+
+  let deepContent = '';
+  if (contentResults.length > 0) {
+    deepContent = '\n\nEXTRACTED ARTICLE CONTENT (from top search results):\n' +
+      contentResults.map(c => `--- ${c.title} [${c.source}] ---\n${c.content}`).join('\n\n');
+  }
+
+  return {
+    articles,
+    articleContent: articleList + deepContent,
+    sourcesSearched: articles.length,
+    contentExtracted: contentResults.length,
+  };
+}
+
 // ─── URGENT / TOPIC-BASED NEWSLETTER GENERATOR ─────────────────────────────
 async function handleAdminUrgentGenerate(request, env) {
   const body = await request.json();
@@ -812,7 +946,15 @@ async function handleAdminUrgentGenerate(request, env) {
   const today = new Date();
   const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  // Fetch threat intel for additional context
+  // 1. Search the web for this specific topic
+  let research = { articles: [], articleContent: '', sourcesSearched: 0, contentExtracted: 0 };
+  try {
+    research = await researchTopic(topic);
+  } catch (e) {
+    console.error('Web research failed:', e.message);
+  }
+
+  // 2. Also fetch our standard threat intel feeds for broader context
   let threatIntel = null;
   let threatIntelPrompt = '';
   try {
@@ -822,11 +964,20 @@ async function handleAdminUrgentGenerate(request, env) {
     console.error('Threat intel fetch failed:', e.message);
   }
 
+  // 3. Build the research context for the prompt
+  let researchPrompt = '';
+  if (research.articleContent) {
+    researchPrompt = `\n\nWEB SEARCH RESULTS FOR "${topic}":\nThe following are real, current news articles and their content found by searching the web. Use these as your PRIMARY source of facts. Cite specific details, agencies, and locations mentioned in these articles.\n\n${research.articleContent}`;
+  } else {
+    researchPrompt = `\n\nNOTE: Web search returned no direct results for this topic. Use the threat intel feeds below and your knowledge to write about this topic. Be transparent if details are limited.`;
+  }
+
   const system = `You are the editor of ShieldSmart, a no-nonsense cyber safety newsletter by XNL Tech.
 Your readers are everyday people — seniors, parents, non-tech workers — who are NOT tech savvy.
 NEVER use jargon without immediately explaining it in plain English. Write as if you're talking to your mom or grandparent.
 Your tone is: urgent but calm, protective, authoritative. You're breaking an important story that your readers need to know about RIGHT NOW.
-CRITICAL: All content MUST be timely and current for ${dateStr}. This is an URGENT ALERT newsletter.`;
+CRITICAL: All content MUST be timely and current for ${dateStr}. This is an URGENT ALERT newsletter.
+You have been given REAL web search results below. You MUST base your newsletter on the ACTUAL facts from those articles. Do NOT invent details.`;
 
   const htmlInstructions = `Format as clean HTML with inline styles. Use ONLY these brand colors: background #111311, card/section background #1E201E, text #F2F5E8, accent lime #BCE600, highlight amber #F5A623, danger red #E8443A, muted text #7A8070. Max-width 900px centered.
 CALLOUT/TIP BOX STYLING RULES (critical for email readability):
@@ -840,10 +991,10 @@ IMPORTANT: Output raw HTML only. No markdown, no code fences, no backticks — j
   const prompt = `Today's date is ${dateStr}. Write an URGENT ALERT newsletter about this specific topic:
 
 "${topic}"
-
+${researchPrompt}
 ${threatIntelPrompt}
 
-Research what you know about this topic and related threats. If the threat intel above contains articles related to this topic, draw heavily from those. Fill in details: who is affected, how the scam/threat works, what the warning signs are, and what readers should do RIGHT NOW.
+Base your newsletter PRIMARILY on the web search results above. Include real details: specific agencies that issued warnings, geographic areas affected, exact methods used by scammers, real reporting resources.
 
 Your VERY FIRST LINE must be the email subject line in this exact format:
 SUBJECT: [alert emoji] Your urgent subject line here
@@ -851,9 +1002,9 @@ The subject MUST directly reference the specific topic. Then leave a blank line 
 
 Structure:
 1. **URGENT ALERT banner** — 1-2 sentences explaining why this matters RIGHT NOW. Make it feel immediate.
-2. **What's Happening** — 3-4 paragraphs explaining the threat/scam/issue in plain language. Include specifics: who reported it (FBI, FTC, state AG, etc.), who's being targeted, what the scam looks like, how it works.
+2. **What's Happening** — 3-4 paragraphs explaining the threat/scam/issue in plain language. Include specifics from the search results: who reported it, who's being targeted, what the scam looks like, how it works. Cite real sources.
 3. **How to Spot It** — Clear warning signs as a bulleted list. Be specific about what to look for (exact phrases scammers use, types of calls/texts, etc.)
-4. **What To Do Right Now** — Numbered action steps. Keep them simple and specific. Include who to report it to (with real phone numbers/websites if applicable like ic3.gov, FTC.gov/complaint, etc.)
+4. **What To Do Right Now** — Numbered action steps. Keep them simple and specific. Include who to report it to (with real phone numbers/websites if applicable like ic3.gov, FTC.gov/complaint, local FBI field office, etc.)
 5. **If You've Already Been Affected** — What to do if it's too late (freeze credit, change passwords, contact bank, file report, etc.)
 6. **Share This Alert** — Encourage readers to forward this to family and friends who might be vulnerable. Keep it to 1-2 sentences.
 7. **Brief sign-off** from the ShieldSmart Team at XNL Tech
@@ -894,7 +1045,6 @@ ${htmlInstructions}`;
   const issueType = 'threat-radar';
   const fullHtml = wrapInEmailShell(rawHtml, subject, issueType);
 
-  // Save as draft
   const dateKey = today.toISOString().split('T')[0] + '-urgent-' + Date.now().toString(36);
   const draft = {
     dateKey,
@@ -911,6 +1061,7 @@ ${htmlInstructions}`;
     edits: [],
     urgent: true,
     originalTopic: topic,
+    webResearch: { sourcesFound: research.sourcesSearched, articlesExtracted: research.contentExtracted, topArticles: (research.articles || []).slice(0, 6).map(a => ({ title: a.title, source: a.source })) },
   };
 
   await saveDraft(env, draft);
@@ -921,6 +1072,9 @@ ${htmlInstructions}`;
     subject,
     html: fullHtml,
     threatIntelSources: threatIntel ? (threatIntel.items || []).length : 0,
+    webSearchResults: research.sourcesSearched,
+    articlesExtracted: research.contentExtracted,
+    topSources: (research.articles || []).slice(0, 5).map(a => a.source + ': ' + a.title),
   });
 }
 
@@ -2503,7 +2657,7 @@ function handleAdminPage() {
           <span style="font-size:20px;">🚨</span>
           <h3 style="color:#E8443A;font-size:16px;">Urgent Alert Generator</h3>
         </div>
-        <p style="color:#7A8070;font-size:13px;margin-bottom:16px;">Enter a breaking topic and the worker will research it using live threat intel feeds, then generate a full urgent-alert newsletter ready to send.</p>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:16px;">Enter a breaking topic and the worker will <strong style="color:#F2F5E8;">search the entire web</strong> — Google News, local news sites, agency warnings — then extract article content and generate a fact-based urgent-alert newsletter.</p>
         <div class="field">
           <label for="urgentTopic">Topic or Breaking News</label>
           <textarea id="urgentTopic" rows="3" placeholder='e.g. "FBI warns Kentuckians of new phone scam going around"&#10;e.g. "New Gmail phishing attack bypasses 2-factor authentication"&#10;e.g. "Major data breach at [company] exposes customer info"'></textarea>
@@ -3303,7 +3457,7 @@ async function doUrgentGenerate() {
   if (!topic) { setStatus('urgentStatus','err','Please enter a topic or breaking news headline.'); return; }
   $('urgentGenBtn').disabled = true;
   $('urgentGenBtn').textContent = 'Researching & generating...';
-  setStatus('urgentStatus','info','Fetching live threat intel, researching your topic, and generating the alert... 30-90 seconds.');
+  setStatus('urgentStatus','info','Searching Google News and the web for your topic, extracting article content, and generating the alert... 30-90 seconds.');
   $('urgentPreviewArea').classList.add('hidden');
   try {
     var res = await fetch('/admin/urgent-generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, topic: topic }) });
@@ -3313,7 +3467,9 @@ async function doUrgentGenerate() {
     $('urgentSubject').textContent = 'Subject: ' + data.subject;
     $('urgentPreviewFrame').srcdoc = data.html;
     $('urgentPreviewArea').classList.remove('hidden');
-    setStatus('urgentStatus','ok','Urgent alert generated! ' + data.threatIntelSources + ' threat intel sources used. Preview below or find it in the Draft Queue.');
+    var sources = 'Web search: ' + (data.webSearchResults || 0) + ' articles found, ' + (data.articlesExtracted || 0) + ' full articles extracted.';
+    if (data.topSources && data.topSources.length > 0) sources += ' Sources: ' + data.topSources.slice(0,3).join('; ');
+    setStatus('urgentStatus','ok','Urgent alert generated! ' + sources + ' Preview below or find it in the Draft Queue.');
     loadDrafts();
   } catch (e) { setStatus('urgentStatus','err','Error: ' + e.message); }
   finally { $('urgentGenBtn').disabled = false; $('urgentGenBtn').textContent = 'Research & Generate Urgent Alert'; }
