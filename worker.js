@@ -3805,11 +3805,17 @@ async function doCustomSend() {
 
 // ─── LANDING PAGE ────────────────────────────────────────────────────────────
 async function handleLandingPage(env) {
+  const SCAM_KEYWORDS = /scam|phish|fraud|steal|stolen|identity|credential|password|fake|impersonat|social.?engineer|sext|ransom|malware|breach|leak|data.?exposed|personal.?info|bank|payment|gift.?card|crypto|bitcoin|romance|sms|text.?message|robo.?call|voice|elder|senior|target|victim|attack.?on|warning|alert|fbi|ftc|irs/i;
+
   let threatHeadlines = [];
   try {
     const intel = await fetchThreatIntel(env);
     if (intel && intel.items && intel.items.length > 0) {
-      threatHeadlines = intel.items.slice(0, 8).map(item => item.title);
+      const scamItems = intel.items.filter(item =>
+        SCAM_KEYWORDS.test(item.title) || SCAM_KEYWORDS.test(item.summary)
+      );
+      const source = scamItems.length >= 4 ? scamItems : intel.items;
+      threatHeadlines = source.slice(0, 8).map(item => item.title);
     }
   } catch (_) {}
   return html(`<!DOCTYPE html>
