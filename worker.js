@@ -4,9 +4,7 @@
  *
  * Routes:
  *   POST /subscribe          — Save subscriber to KV
- *   GET  /generate           — Generate newsletter with Anthropic (cron-triggered or manual)
- *   GET  /subscribers        — List subscribers (admin, requires secret header)
- *   POST /send               — Trigger send to all subscribers (admin)
+ *   POST /admin/subscribers  — List subscribers (admin, requires secret in body)
  *
  * Env vars to set in Cloudflare dashboard:
  *   ANTHROPIC_API_KEY        — Your Anthropic API key
@@ -54,16 +52,8 @@ export default {
       return handleSubscribe(request, env);
     }
 
-    if (request.method === 'GET' && url.pathname === '/generate') {
-      return handleGenerate(request, env);
-    }
-
-    if (request.method === 'GET' && url.pathname === '/subscribers') {
-      return handleListSubscribers(request, env);
-    }
-
-    if (request.method === 'POST' && url.pathname === '/send') {
-      return handleSend(request, env);
+    if (url.pathname === '/admin/subscribers' && request.method === 'POST') {
+      return handleAdminSubscribers(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/unsubscribe') {
@@ -184,7 +174,7 @@ export default {
     }
 
     if (url.pathname === '/') {
-      return handleLandingPage();
+      return handleLandingPage(env);
     }
 
     return json({ error: 'Not found' }, 404);
@@ -455,8 +445,9 @@ async function handleSubscribe(request, env) {
 }
 
 // ─── LIST SUBSCRIBERS (ADMIN) ────────────────────────────────────────────────
-async function handleListSubscribers(request, env) {
-  if (!isAdmin(request, env)) {
+async function handleAdminSubscribers(request, env) {
+  const body = await request.json();
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) {
     return json({ error: 'Unauthorized' }, 401);
   }
 
@@ -469,33 +460,6 @@ async function handleListSubscribers(request, env) {
   }
 
   return json({ count: subscribers.length, subscribers });
-}
-
-// ─── GENERATE NEWSLETTER (ADMIN OR CRON) ────────────────────────────────────
-async function handleGenerate(request, env) {
-  if (!isAdmin(request, env)) {
-    return json({ error: 'Unauthorized' }, 401);
-  }
-
-  const url = new URL(request.url);
-  const type = url.searchParams.get('type') || getIssueType();
-  const newsletter = await generateNewsletter(env, type);
-
-  return html(newsletter.html);
-}
-
-// ─── SEND TO ALL (ADMIN) ─────────────────────────────────────────────────────
-async function handleSend(request, env) {
-  if (!isAdmin(request, env)) {
-    return json({ error: 'Unauthorized' }, 401);
-  }
-
-  const url = new URL(request.url);
-  const type = url.searchParams.get('type') || getIssueType();
-  const newsletter = await generateNewsletter(env, type);
-  const result = await sendToAllSubscribers(newsletter, env);
-
-  return json({ success: true, ...result });
 }
 
 // ─── ADMIN: GENERATE FROM READER QUESTION ───────────────────────────────────
@@ -1086,26 +1050,21 @@ async function handleSocialGen(request, env) {
   }
 
   const topic = (body.topic || '').trim();
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  // Grab the 3 most recent issue subjects as context
-  let recentIssues = '';
+  // Fetch live threat intel from RSS feeds (same as newsletter generator)
+  let threatIntelPrompt = '';
   try {
-    const list = await env.CONTENT.list({ prefix: 'issue:' });
-    const metaKeys = list.keys
-      .filter(k => k.name.endsWith(':meta'))
-      .sort((a, b) => b.name.localeCompare(a.name))
-      .slice(0, 3);
-    const items = [];
-    for (const key of metaKeys) {
-      const val = await env.CONTENT.get(key.name);
-      if (val) { const m = JSON.parse(val); items.push(m.subject); }
-    }
-    if (items.length) recentIssues = '\nRecent newsletter topics for context:\n' + items.map(s => '- ' + s).join('\n');
-  } catch (_) {}
+    const threatIntel = await fetchThreatIntel(env);
+    threatIntelPrompt = formatThreatIntelForPrompt(threatIntel);
+  } catch (e) {
+    console.error('Social gen: threat intel fetch failed:', e.message);
+  }
 
   const topicInstruction = topic
     ? `The admin wants posts specifically about this topic or angle: "${topic}"`
-    : 'Pick an attention-grabbing cyber safety angle relevant this week.';
+    : 'Pick an attention-grabbing cyber safety angle from the current threat intel below.';
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -1117,21 +1076,25 @@ async function handleSocialGen(request, env) {
     body: JSON.stringify({
       model: 'claude-opus-4-5',
       max_tokens: 2000,
-      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. Our subscriber community is called "the XNL Alliance." The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to "join the Alliance" at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.`,
+      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. Our subscriber community is called "the XNL Alliance." The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to "join the Alliance" at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.
+Today's date is ${dateStr}. All posts MUST reference REAL, CURRENT threats or news — never make up scenarios.`,
       messages: [{ role: 'user', content: `Generate social media posts to promote XNL Cyber Shield and get people to join the XNL Alliance.
 
-${topicInstruction}${recentIssues}
+${topicInstruction}
+${threatIntelPrompt}
+
+Your posts MUST be based on the real current threats above. Reference specific, real stories — not generic "hackers are out there" fear. Make it feel like breaking news that everyday people need to know about.
 
 Generate EXACTLY this output format (plain text, no markdown):
 
 FACEBOOK:
-[A Facebook post, 2-4 short paragraphs. Hook with a scary/relatable scenario. Include 1-2 emojis per paragraph. End with a clear CTA to join the Alliance at xnltech.com. Can be slightly longer and conversational.]
+[A Facebook post, 2-4 short paragraphs. Hook with a REAL current threat or news story from the intel above. Include 1-2 emojis per paragraph. End with a clear CTA to join the Alliance at xnltech.com. Can be slightly longer and conversational.]
 
 TWITTER:
-[A Twitter/X post, max 280 characters. Punchy, urgent, with a CTA link to xnltech.com. Include 1-2 relevant emojis.]
+[A Twitter/X post, max 280 characters. Punchy, urgent, referencing a real current threat. CTA link to xnltech.com. Include 1-2 relevant emojis.]
 
 TWITTER_ALT:
-[A second Twitter/X post option, different angle, max 280 characters.]
+[A second Twitter/X post option, different angle or different threat from the intel, max 280 characters.]
 
 Output ONLY the posts in the exact format above. No commentary, no labels like "Here are", no markdown.` }],
     }),
@@ -1552,6 +1515,87 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
         ${innerHtml}
       </td></tr>
 
+      <!-- Recommended Tools -->
+      <tr><td bgcolor="#151715" style="background-color:#151715;padding:28px 32px;border-top:2px solid #BCE600;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr><td style="padding-bottom:14px;">
+            <span style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#BCE600;font-family:Arial,sans-serif;">&#128736; Alliance-Recommended Tools</span>
+          </td></tr>
+          <tr><td style="font-size:13px;color:#7A8070;line-height:1.7;font-family:Arial,sans-serif;padding-bottom:16px;">
+            These are tools we trust and recommend to keep you safe online. Some links may earn XNL Tech a small commission at no extra cost to you — it helps keep the newsletter free.
+          </td></tr>
+          <tr><td>
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td width="50%" valign="top" style="padding:0 8px 12px 0;">
+                  <table cellpadding="0" cellspacing="0" border="0" bgcolor="#1E201E" style="width:100%;background-color:#1E201E;border:1px solid #2A2C2A;border-radius:8px;">
+                    <tr><td style="padding:14px 16px;">
+                      <div style="font-size:14px;font-weight:700;color:#F2F5E8;margin-bottom:4px;font-family:Arial,sans-serif;">&#128272; Password Manager</div>
+                      <div style="font-size:12px;color:#7A8070;line-height:1.5;font-family:Arial,sans-serif;">Stop reusing passwords. One tool, all your accounts.</div>
+                      <div style="margin-top:8px;"><a href="https://1password.com" style="color:#BCE600;font-size:12px;font-weight:700;text-decoration:none;font-family:Arial,sans-serif;">Get Protected &rarr;</a></div>
+                    </td></tr>
+                  </table>
+                </td>
+                <td width="50%" valign="top" style="padding:0 0 12px 8px;">
+                  <table cellpadding="0" cellspacing="0" border="0" bgcolor="#1E201E" style="width:100%;background-color:#1E201E;border:1px solid #2A2C2A;border-radius:8px;">
+                    <tr><td style="padding:14px 16px;">
+                      <div style="font-size:14px;font-weight:700;color:#F2F5E8;margin-bottom:4px;font-family:Arial,sans-serif;">&#128737; VPN</div>
+                      <div style="font-size:12px;color:#7A8070;line-height:1.5;font-family:Arial,sans-serif;">Protect your browsing on public Wi-Fi and at home.</div>
+                      <div style="margin-top:8px;"><a href="https://nordvpn.com" style="color:#BCE600;font-size:12px;font-weight:700;text-decoration:none;font-family:Arial,sans-serif;">Get Protected &rarr;</a></div>
+                    </td></tr>
+                  </table>
+                </td>
+              </tr>
+              <tr>
+                <td width="50%" valign="top" style="padding:0 8px 0 0;">
+                  <table cellpadding="0" cellspacing="0" border="0" bgcolor="#1E201E" style="width:100%;background-color:#1E201E;border:1px solid #2A2C2A;border-radius:8px;">
+                    <tr><td style="padding:14px 16px;">
+                      <div style="font-size:14px;font-weight:700;color:#F2F5E8;margin-bottom:4px;font-family:Arial,sans-serif;">&#128170; Antivirus</div>
+                      <div style="font-size:12px;color:#7A8070;line-height:1.5;font-family:Arial,sans-serif;">Real-time protection from malware and ransomware.</div>
+                      <div style="margin-top:8px;"><a href="https://malwarebytes.com" style="color:#BCE600;font-size:12px;font-weight:700;text-decoration:none;font-family:Arial,sans-serif;">Get Protected &rarr;</a></div>
+                    </td></tr>
+                  </table>
+                </td>
+                <td width="50%" valign="top" style="padding:0 0 0 8px;">
+                  <table cellpadding="0" cellspacing="0" border="0" bgcolor="#1E201E" style="width:100%;background-color:#1E201E;border:1px solid #2A2C2A;border-radius:8px;">
+                    <tr><td style="padding:14px 16px;">
+                      <div style="font-size:14px;font-weight:700;color:#F2F5E8;margin-bottom:4px;font-family:Arial,sans-serif;">&#128694; Identity Protection</div>
+                      <div style="font-size:12px;color:#7A8070;line-height:1.5;font-family:Arial,sans-serif;">Monitor the dark web for your personal info leaks.</div>
+                      <div style="margin-top:8px;"><a href="https://aura.com" style="color:#BCE600;font-size:12px;font-weight:700;text-decoration:none;font-family:Arial,sans-serif;">Get Protected &rarr;</a></div>
+                    </td></tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+        </table>
+      </td></tr>
+
+      <!-- Share With Friends -->
+      <tr><td bgcolor="#1A2600" style="background-color:#1A2600;padding:24px 32px;border-top:1px solid #4A6600;text-align:center;">
+        <p style="font-size:15px;font-weight:700;color:#BCE600;margin:0 0 6px;font-family:Arial,sans-serif;">&#128640; Know someone who needs this?</p>
+        <p style="font-size:13px;color:#A8B898;margin:0 0 16px;font-family:Arial,sans-serif;">Help grow the Alliance — share this issue with a friend.</p>
+        <table cellpadding="0" cellspacing="0" border="0" align="center">
+          <tr>
+            <td style="padding:0 5px;">
+              <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(subject + ' — free cybersecurity tips from XNL Cyber Shield')}&url=${encodeURIComponent('https://xnltech.com')}" style="display:inline-block;background:#1DA1F2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">X / Twitter</a>
+            </td>
+            <td style="padding:0 5px;">
+              <a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent('https://xnltech.com')}&quote=${encodeURIComponent(subject + ' — join the XNL Alliance for free cybersecurity tips!')}" style="display:inline-block;background:#1877F2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">Facebook</a>
+            </td>
+            <td style="padding:0 5px;">
+              <a href="https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent('https://xnltech.com')}" style="display:inline-block;background:#0A66C2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">LinkedIn</a>
+            </td>
+            <td style="padding:0 5px;">
+              <a href="https://api.whatsapp.com/send?text=${encodeURIComponent(subject + ' — I get free cybersecurity tips from XNL Cyber Shield. You should join too: https://xnltech.com')}" style="display:inline-block;background:#25D366;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">WhatsApp</a>
+            </td>
+            <td style="padding:0 5px;">
+              <a href="mailto:?subject=${encodeURIComponent('Check out XNL Cyber Shield')}&body=${encodeURIComponent('I just read: ' + subject + '\n\nIt\'s a free daily cybersecurity newsletter with tips anyone can understand. Join here: https://xnltech.com')}" style="display:inline-block;background:#7A8070;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">Email</a>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
       <!-- Footer -->
       <tr><td bgcolor="#111311" style="background-color:#111311;border-top:1px solid #2A2C2A;padding:24px 32px;text-align:center;">
         <p style="font-size:13px;color:#F2F5E8;margin:0 0 14px;font-family:Arial,sans-serif;">
@@ -1612,7 +1656,7 @@ async function sendEmail(subscriber, htmlContent, subject, env) {
     return;
   }
 
-  const personalizedHtml = htmlContent.replace(
+  let personalizedHtml = htmlContent.replace(
     '{unsubscribe_url}',
     `https://xnltech.com/unsubscribe?email=${encodeURIComponent(subscriber.email)}`
   );
@@ -1653,7 +1697,7 @@ function welcomeEmailHtml(firstName) {
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#111311" style="background-color:#111311;">
   <tr>
     <td align="center" bgcolor="#111311" style="padding:24px 16px;background-color:#111311;">
-      <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#1E201E" style="max-width:600px;width:100%;background-color:#1E201E;border-radius:12px;">
+      <table width="900" cellpadding="0" cellspacing="0" border="0" bgcolor="#1E201E" style="max-width:900px;width:100%;background-color:#1E201E;border-radius:12px;">
 
         <!-- Header -->
         <tr>
@@ -2011,7 +2055,19 @@ async function handleArchiveIndex(request, env) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>XNL Cyber Shield Archive | XNL Tech</title>
+<title>XNL Cyber Shield Archive — Free Cybersecurity Newsletter | XNL Tech</title>
+<meta name="description" content="Browse every issue of XNL Cyber Shield — free daily cybersecurity tips, scam alerts, and online safety guides delivered in plain English. Join the XNL Alliance." />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="https://xnltech.com/archive" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="XNL Cyber Shield — Newsletter Archive" />
+<meta property="og:description" content="Free daily cybersecurity tips, scam alerts, and safety guides. Browse all past issues." />
+<meta property="og:url" content="https://xnltech.com/archive" />
+<meta property="og:site_name" content="XNL Cyber Shield" />
+<meta property="og:image" content="https://xnltech.com/logo.png" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="XNL Cyber Shield — Newsletter Archive" />
+<meta name="twitter:description" content="Free daily cybersecurity tips, scam alerts, and safety guides. Browse all past issues." />
 <link rel="icon" type="image/png" href="/logo.png" />
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Figtree:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -2092,12 +2148,53 @@ async function handleArchiveRead(issueId, env) {
   const label = typeLabel[meta.issueType] || 'XNL Cyber Shield';
   const date = meta.generatedAt ? new Date(meta.generatedAt).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
 
+  const plainText = (issueBody || issueHtml || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const seoDescription = (plainText.slice(0, 155) + (plainText.length > 155 ? '...' : '')).replace(/"/g, '&quot;');
+  const canonicalUrl = 'https://xnltech.com/archive/' + encodeURIComponent(decoded);
+  const publishDate = meta.generatedAt || new Date().toISOString();
+
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${subject} | XNL Cyber Shield</title>
+<title>${subject} | XNL Cyber Shield — Free Cybersecurity Newsletter</title>
+<meta name="description" content="${seoDescription}" />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="${canonicalUrl}" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="article" />
+<meta property="og:title" content="${subject}" />
+<meta property="og:description" content="${seoDescription}" />
+<meta property="og:url" content="${canonicalUrl}" />
+<meta property="og:site_name" content="XNL Cyber Shield" />
+<meta property="og:image" content="https://xnltech.com/logo.png" />
+<meta property="article:published_time" content="${publishDate}" />
+<meta property="article:author" content="XNL Tech" />
+<meta property="article:section" content="Cybersecurity" />
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="${subject}" />
+<meta name="twitter:description" content="${seoDescription}" />
+<meta name="twitter:image" content="https://xnltech.com/logo.png" />
+
+<!-- Structured Data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "${subject.replace(/"/g, '\\"')}",
+  "description": "${plainText.slice(0, 200).replace(/"/g, '\\"')}",
+  "datePublished": "${publishDate}",
+  "author": { "@type": "Organization", "name": "XNL Tech", "url": "https://xnltech.com" },
+  "publisher": { "@type": "Organization", "name": "XNL Cyber Shield", "url": "https://xnltech.com", "logo": { "@type": "ImageObject", "url": "https://xnltech.com/logo.png" } },
+  "mainEntityOfPage": "${canonicalUrl}",
+  "image": "https://xnltech.com/logo.png"
+}
+</script>
+
 <link rel="icon" type="image/png" href="/logo.png" />
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Figtree:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -2962,7 +3059,7 @@ function initDashboard() {
 // ── Subscriber count ──
 async function loadSubCount() {
   try {
-    var res = await fetch('/subscribers', { headers: { 'X-Admin-Secret': adminSecret } });
+    var res = await fetch('/admin/subscribers', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
     var data = await res.json();
     if (data.subscribers) {
       var active = data.subscribers.filter(function(s) { return s.active; }).length;
@@ -3557,6 +3654,7 @@ async function doSocialGen() {
   finally { $('socialBtn').disabled = false; $('socialBtn').textContent = 'Generate Posts'; }
 }
 
+
 function copyText(id) {
   var text = $(id).textContent;
   navigator.clipboard.writeText(text).then(function() {
@@ -3706,7 +3804,14 @@ async function doCustomSend() {
 }
 
 // ─── LANDING PAGE ────────────────────────────────────────────────────────────
-function handleLandingPage() {
+async function handleLandingPage(env) {
+  let threatHeadlines = [];
+  try {
+    const intel = await fetchThreatIntel(env);
+    if (intel && intel.items && intel.items.length > 0) {
+      threatHeadlines = intel.items.slice(0, 8).map(item => item.title);
+    }
+  } catch (_) {}
   return html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4363,7 +4468,7 @@ function handleLandingPage() {
 
       <div class="threat-bar">
         <span class="threat-label">&#9888;&nbsp;Active</span>
-        <span class="threat-text" id="threat-ticker">AI voice cloning scams targeting seniors up 340% this year</span>
+        <span class="threat-text" id="threat-ticker">${threatHeadlines.length > 0 ? threatHeadlines[0].replace(/[`$\\]/g, '') : 'New cyber threats detected — join the Alliance to stay protected'}</span>
       </div>
 
       <div id="form-wrapper">
@@ -4432,7 +4537,29 @@ function handleLandingPage() {
         <div class="success-icon">&#128737;</div>
         <h3>YOU'RE ALL SET!</h3>
         <p>Welcome to the XNL Alliance. Check your inbox &mdash; a welcome message is on its way.<br/><br/>
-        Your first issue arrives <strong style="color:var(--off)">tomorrow morning.</strong> We send every weekday.</p>
+        Your first issue arrives <strong style="color:var(--off)" id="next-issue-time"></strong></p>
+        <script>
+        (function(){
+          var days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+          var topics=['','Monday morning (Threat Radar)','Tuesday morning (Scam Spotlight)','Wednesday morning (Safety Skill)','Thursday morning (News Brief)','Friday morning (Fix-It Help Desk)','',''];
+          var now=new Date();
+          var d=now.getDay(),h=now.getHours();
+          var next;
+          if(d>=1&&d<=4){next=d+1;if(d>=1&&d<=5&&h<11){next=d;}}
+          else if(d===5){next=h<11?5:1;}
+          else if(d===6){next=1;}
+          else{next=1;}
+          if(next>5)next=1;
+          var label=topics[next]||'Monday morning (Threat Radar)';
+          var el=document.getElementById('next-issue-time');
+          if(el){
+            if((d>=1&&d<=5&&h<11)){el.textContent='this '+label+'. We send every weekday!';}
+            else if(d===5&&h>=11){el.textContent='Monday morning (Threat Radar). We send every weekday!';}
+            else if(d===6||d===0){el.textContent='Monday morning (Threat Radar). We send every weekday!';}
+            else{el.textContent=label+'. We send every weekday!';}
+          }
+        })();
+        </script>
         <div style="background:rgba(188,230,0,0.08);border:1px solid rgba(188,230,0,0.25);border-radius:10px;padding:16px 20px;margin-top:18px;text-align:left;font-size:0.92rem;line-height:1.6;color:var(--muted);">
           <strong style="color:#BCE600;">&#128235; Don't see it?</strong> Check your <strong style="color:var(--off)">Spam</strong> or <strong style="color:var(--off)">Junk</strong> folder &mdash; sometimes new senders land there. To make sure you never miss an issue:<br/>
           &bull; Move our welcome email to your Inbox<br/>
@@ -4546,14 +4673,9 @@ function handleLandingPage() {
     if (e.key === 'Escape') closeModal('privacy-modal');
   });
 
-  const threats = [
-    'AI voice cloning scams targeting seniors up 340% this year',
-    'Fake IRS text messages surging ahead of tax season',
-    '"Your package was undeliverable" SMS scam spreading fast',
-    'New phishing kit bypasses 2-factor authentication codes',
-    'Fake McAfee renewal emails dropping dangerous malware',
-    'Public WiFi credential theft rising at airports and hotels',
-  ];
+  const threats = ${threatHeadlines.length > 0
+    ? JSON.stringify(threatHeadlines)
+    : JSON.stringify(['New cyber threats detected — join the Alliance to stay protected'])};
   let ti = 0;
   const el = document.getElementById('threat-ticker');
   setInterval(() => {
@@ -5028,6 +5150,7 @@ async function sendStatusReport(env, report) {
       <div style="color:${report.xPostStatus === 'posted' ? '#BCE600' : '#E8443A'};font-size:14px;font-weight:600;">${report.xPostStatus === 'posted' ? 'POSTED' : 'FAILED: ' + (report.xPostError || 'unknown')}</div>
       ${report.tweetText ? '<div style="color:#7A8070;font-size:13px;margin-top:6px;white-space:pre-wrap;">' + report.tweetText + '</div>' : ''}
     </td></tr>` : '';
+
 
   const growthSection = report.growth ? `
     <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;">
