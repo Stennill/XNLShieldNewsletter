@@ -1571,6 +1571,46 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
         </table>
       </td></tr>
 
+      <!-- Checklist & Guides Banner -->
+      <tr><td bgcolor="#111311" style="background-color:#111311;padding:24px 32px;border-top:1px solid #2A2C2A;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td bgcolor="#222522" style="background-color:#222522;padding:24px;border-radius:8px;border:1px solid #3A3D3A;">
+              <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:18px;font-weight:700;margin:0 0 10px;">&#127919; Ready to take action?</p>
+              <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:15px;line-height:1.7;margin:0 0 16px;">
+                Reading the newsletter is step one. Now put what you learn into practice with our <strong style="color:#BCE600;">free tools</strong> at XNLTech.com:
+              </p>
+              <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td style="padding-bottom:12px;">
+                    <a href="https://xnltech.com/checklist" style="text-decoration:none;display:block;">
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+                        <td bgcolor="#1E201E" style="background-color:#1E201E;padding:14px 18px;border-radius:8px;border-left:4px solid #BCE600;">
+                          <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:14px;font-weight:700;margin:0 0 4px;">&#128505; Digital Protection Checklist</p>
+                          <p style="color:#A8B898;font-family:Arial,sans-serif;font-size:13px;line-height:1.5;margin:0;">25 steps to lock down your accounts, protect your identity, and keep your family safe. Track your progress as you go.</p>
+                        </td>
+                      </tr></table>
+                    </a>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <a href="https://xnltech.com/guides" style="text-decoration:none;display:block;">
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+                        <td bgcolor="#1E201E" style="background-color:#1E201E;padding:14px 18px;border-radius:8px;border-left:4px solid #BCE600;">
+                          <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:14px;font-weight:700;margin:0 0 4px;">&#128214; Step-by-Step How-To Guides</p>
+                          <p style="color:#A8B898;font-family:Arial,sans-serif;font-size:13px;line-height:1.5;margin:0;">Plain-English instructions that tell you exactly which buttons to tap. iPhone, Android, Windows, and Mac &mdash; we walk you through all of them.</p>
+                        </td>
+                      </tr></table>
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
       <!-- Share With Friends -->
       <tr><td bgcolor="#1A2600" style="background-color:#1A2600;padding:24px 32px;border-top:1px solid #4A6600;text-align:center;">
         <p style="font-size:15px;font-weight:700;color:#BCE600;margin:0 0 6px;font-family:Arial,sans-serif;">&#128640; Know someone who needs this?</p>
@@ -1791,6 +1831,40 @@ function welcomeEmailHtml(firstName) {
                     2. <strong style="color:#BCE600;">Add us to your contacts</strong> &mdash; save <strong>noreply@xnltech.com</strong><br/>
                     3. <strong style="color:#BCE600;">Gmail users:</strong> If you see "This message is in your Promotions tab," click <em>"Move to Primary"</em>
                   </p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Checklist & Guides -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
+              <tr>
+                <td bgcolor="#222522" style="background-color:#222522;padding:24px;border-radius:8px;border:1px solid #3A3D3A;">
+                  <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:20px;font-weight:700;margin:0 0 8px;">&#127919; Your First Mission</p>
+                  <p style="color:#F2F5E8;font-family:Arial,sans-serif;font-size:16px;line-height:1.7;margin:0 0 16px;">
+                    While you wait for tomorrow's newsletter, start protecting yourself right now with our free tools:
+                  </p>
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding-bottom:10px;">
+                      <a href="https://xnltech.com/checklist" style="text-decoration:none;display:block;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td bgcolor="#111311" style="background-color:#111311;padding:14px 18px;border-radius:8px;border-left:4px solid #BCE600;">
+                            <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:15px;font-weight:700;margin:0 0 4px;">&#128505; Take the Digital Protection Checklist</p>
+                            <p style="color:#A8B898;font-family:Arial,sans-serif;font-size:14px;line-height:1.5;margin:0;">25 steps to lock down your accounts and protect your family. Track your progress as you check each one off.</p>
+                          </td>
+                        </tr></table>
+                      </a>
+                    </td></tr>
+                    <tr><td>
+                      <a href="https://xnltech.com/guides" style="text-decoration:none;display:block;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+                          <td bgcolor="#111311" style="background-color:#111311;padding:14px 18px;border-radius:8px;border-left:4px solid #BCE600;">
+                            <p style="color:#BCE600;font-family:Arial,sans-serif;font-size:15px;font-weight:700;margin:0 0 4px;">&#128214; Read the Step-by-Step Guides</p>
+                            <p style="color:#A8B898;font-family:Arial,sans-serif;font-size:14px;line-height:1.5;margin:0;">Plain-English instructions that tell you exactly which buttons to tap on iPhone, Android, Windows, and Mac.</p>
+                          </td>
+                        </tr></table>
+                      </a>
+                    </td></tr>
+                  </table>
                 </td>
               </tr>
             </table>
