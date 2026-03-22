@@ -5,11 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 
 # ─── CUSTOM DOMAIN ──────────────────────────────────────────────────────────
 # newsletter.xnltech.com — serves the newsletter worker
-# xnltech.com / www — redirects to newsletter.xnltech.com (for now)
+# xnltech.com / www — served by xnltech-main worker (separate project)
 routes = [
-  { pattern = "newsletter.xnltech.com/*", zone_name = "xnltech.com" },
-  { pattern = "xnltech.com/*", zone_name = "xnltech.com" },
-  { pattern = "www.xnltech.com/*", zone_name = "xnltech.com" }
+  { pattern = "newsletter.xnltech.com/*", zone_name = "xnltech.com" }
 ]
 
 # ─── CRON SCHEDULE (3-stage pipeline, weekdays only) ───────────────────────

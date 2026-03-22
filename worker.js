@@ -43,13 +43,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Redirect bare domain to newsletter subdomain
-    if (url.hostname === 'xnltech.com' || url.hostname === 'www.xnltech.com') {
-      const dest = new URL(request.url);
-      dest.hostname = 'newsletter.xnltech.com';
-      return Response.redirect(dest.toString(), 301);
-    }
-
     // Handle preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS });
@@ -1615,6 +1608,8 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
           <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
           &nbsp;&bull;&nbsp;
           <a href="mailto:help@xnltech.com" style="color:#BCE600;text-decoration:none;">Contact Us</a>
+          &nbsp;&bull;&nbsp;
+          <a href="https://xnltech.com/guides" style="color:#BCE600;text-decoration:none;">Free Guides</a>
           &nbsp;&bull;&nbsp;
           <a href="https://XNLTech.com" style="color:#BCE600;text-decoration:none;">XNLTech.com</a>
         </p>
