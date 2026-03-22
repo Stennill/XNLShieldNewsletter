@@ -4,8 +4,10 @@ compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 # ─── CUSTOM DOMAIN ──────────────────────────────────────────────────────────
-# This routes xnltech.com to this Worker instead of Cloudflare Pages
+# newsletter.xnltech.com — serves the newsletter worker
+# xnltech.com / www — redirects to newsletter.xnltech.com (for now)
 routes = [
+  { pattern = "newsletter.xnltech.com/*", zone_name = "xnltech.com" },
   { pattern = "xnltech.com/*", zone_name = "xnltech.com" },
   { pattern = "www.xnltech.com/*", zone_name = "xnltech.com" }
 ]

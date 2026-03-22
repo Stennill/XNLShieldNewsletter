@@ -43,6 +43,13 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // Redirect bare domain to newsletter subdomain
+    if (url.hostname === 'xnltech.com' || url.hostname === 'www.xnltech.com') {
+      const dest = new URL(request.url);
+      dest.hostname = 'newsletter.xnltech.com';
+      return Response.redirect(dest.toString(), 301);
+    }
+
     // Handle preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS });
@@ -319,7 +326,7 @@ export default {
       <div style="color:#F2F5E8;font-size:14px;white-space:pre-wrap;">${issuesSummary}</div>
     </div>
     <div style="color:#F5A623;font-size:14px;margin-bottom:16px;">You have until <strong>10:00 AM EST</strong> to review. After that, Claude will auto-fix and send.</div>
-    <a href="https://xnltech.com/admin" style="display:inline-block;background:#BCE600;color:#111311;padding:10px 24px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">Review in Admin Panel</a>
+    <a href="https://newsletter.xnltech.com/admin" style="display:inline-block;background:#BCE600;color:#111311;padding:10px 24px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">Review in Admin Panel</a>
   </td></tr>
 </table></td></tr></table></body></html>`;
 
@@ -970,7 +977,7 @@ Structure:
 3. **How to Spot It** — Clear warning signs as a bulleted list. Be specific about what to look for (exact phrases scammers use, types of calls/texts, etc.)
 4. **What To Do Right Now** — Numbered action steps. Keep them simple and specific. Include who to report it to (with real phone numbers/websites if applicable like ic3.gov, FTC.gov/complaint, local FBI field office, etc.)
 5. **If You've Already Been Affected** — What to do if it's too late (freeze credit, change passwords, contact bank, file report, etc.)
-6. **Share This Alert** — Encourage Alliance members to forward this to family and friends who might be vulnerable. Invite them to join the Alliance at xnltech.com. Keep it to 1-2 sentences.
+6. **Share This Alert** — Encourage Alliance members to forward this to family and friends who might be vulnerable. Invite them to join the Alliance at newsletter.xnltech.com. Keep it to 1-2 sentences.
 7. **Brief sign-off** from the XNL Cyber Shield Team at XNL Tech
 
 ${htmlInstructions}`;
@@ -1076,7 +1083,7 @@ async function handleSocialGen(request, env) {
     body: JSON.stringify({
       model: 'claude-opus-4-5',
       max_tokens: 2000,
-      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. Our subscriber community is called "the XNL Alliance." The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to "join the Alliance" at xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.
+      system: `You write social media posts for XNL Cyber Shield, a free cyber safety newsletter by XNL Tech. Our subscriber community is called "the XNL Alliance." The newsletter delivers plain-English security tips every weekday (Mon-Fri). The goal of every post is to get people to "join the Alliance" at newsletter.xnltech.com. Tone: urgent but friendly, relatable, never jargon-heavy. Use the kind of language that makes non-tech people stop scrolling.
 Today's date is ${dateStr}. All posts MUST reference REAL, CURRENT threats or news — never make up scenarios.`,
       messages: [{ role: 'user', content: `Generate social media posts to promote XNL Cyber Shield and get people to join the XNL Alliance.
 
@@ -1088,10 +1095,10 @@ Your posts MUST be based on the real current threats above. Reference specific, 
 Generate EXACTLY this output format (plain text, no markdown):
 
 FACEBOOK:
-[A Facebook post, 2-4 short paragraphs. Hook with a REAL current threat or news story from the intel above. Include 1-2 emojis per paragraph. End with a clear CTA to join the Alliance at xnltech.com. Can be slightly longer and conversational.]
+[A Facebook post, 2-4 short paragraphs. Hook with a REAL current threat or news story from the intel above. Include 1-2 emojis per paragraph. End with a clear CTA to join the Alliance at newsletter.xnltech.com. Can be slightly longer and conversational.]
 
 TWITTER:
-[A Twitter/X post, max 280 characters. Punchy, urgent, referencing a real current threat. CTA link to xnltech.com. Include 1-2 relevant emojis.]
+[A Twitter/X post, max 280 characters. Punchy, urgent, referencing a real current threat. CTA link to newsletter.xnltech.com. Include 1-2 relevant emojis.]
 
 TWITTER_ALT:
 [A second Twitter/X post option, different angle or different threat from the intel, max 280 characters.]
@@ -1494,7 +1501,7 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
           <tr>
             <td style="font-family:Arial,'Helvetica Neue',sans-serif;">
               <table cellpadding="0" cellspacing="0" border="0"><tr>
-                <td style="vertical-align:middle;padding-right:12px;"><img src="https://xnltech.com/logo.png" alt="XNL Cyber Shield" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
+                <td style="vertical-align:middle;padding-right:12px;"><img src="https://newsletter.xnltech.com/logo.png" alt="XNL Cyber Shield" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
                 <td style="vertical-align:middle;">
                   <div style="font-size:22px;font-weight:800;color:#FFFFFF;font-family:Arial,'Helvetica Neue',sans-serif;">XNL CYBER <span style="color:#BCE600;">SHIELD</span></div>
                   <div style="font-size:11px;color:#7A8070;text-transform:uppercase;letter-spacing:0.1em;margin-top:2px;">by XNL Tech</div>
@@ -1578,19 +1585,19 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
         <table cellpadding="0" cellspacing="0" border="0" align="center">
           <tr>
             <td style="padding:0 5px;">
-              <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(subject + ' — free cybersecurity tips from XNL Cyber Shield')}&url=${encodeURIComponent('https://xnltech.com')}" style="display:inline-block;background:#1DA1F2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">X / Twitter</a>
+              <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(subject + ' — free cybersecurity tips from XNL Cyber Shield')}&url=${encodeURIComponent('https://newsletter.xnltech.com')}" style="display:inline-block;background:#1DA1F2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">X / Twitter</a>
             </td>
             <td style="padding:0 5px;">
-              <a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent('https://xnltech.com')}&quote=${encodeURIComponent(subject + ' — join the XNL Alliance for free cybersecurity tips!')}" style="display:inline-block;background:#1877F2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">Facebook</a>
+              <a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent('https://newsletter.xnltech.com')}&quote=${encodeURIComponent(subject + ' — join the XNL Alliance for free cybersecurity tips!')}" style="display:inline-block;background:#1877F2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">Facebook</a>
             </td>
             <td style="padding:0 5px;">
-              <a href="https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent('https://xnltech.com')}" style="display:inline-block;background:#0A66C2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">LinkedIn</a>
+              <a href="https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent('https://newsletter.xnltech.com')}" style="display:inline-block;background:#0A66C2;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">LinkedIn</a>
             </td>
             <td style="padding:0 5px;">
-              <a href="https://api.whatsapp.com/send?text=${encodeURIComponent(subject + ' — I get free cybersecurity tips from XNL Cyber Shield. You should join too: https://xnltech.com')}" style="display:inline-block;background:#25D366;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">WhatsApp</a>
+              <a href="https://api.whatsapp.com/send?text=${encodeURIComponent(subject + ' — I get free cybersecurity tips from XNL Cyber Shield. You should join too: https://newsletter.xnltech.com')}" style="display:inline-block;background:#25D366;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">WhatsApp</a>
             </td>
             <td style="padding:0 5px;">
-              <a href="mailto:?subject=${encodeURIComponent('Check out XNL Cyber Shield')}&body=${encodeURIComponent('I just read: ' + subject + '\n\nIt\'s a free daily cybersecurity newsletter with tips anyone can understand. Join here: https://xnltech.com')}" style="display:inline-block;background:#7A8070;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">Email</a>
+              <a href="mailto:?subject=${encodeURIComponent('Check out XNL Cyber Shield')}&body=${encodeURIComponent('I just read: ' + subject + '\n\nIt\'s a free daily cybersecurity newsletter with tips anyone can understand. Join here: https://newsletter.xnltech.com')}" style="display:inline-block;background:#7A8070;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;text-decoration:none;font-family:Arial,sans-serif;">Email</a>
             </td>
           </tr>
         </table>
@@ -1599,10 +1606,10 @@ function wrapInEmailShell(innerHtml, subject, issueType) {
       <!-- Footer -->
       <tr><td bgcolor="#111311" style="background-color:#111311;border-top:1px solid #2A2C2A;padding:24px 32px;text-align:center;">
         <p style="font-size:13px;color:#F2F5E8;margin:0 0 14px;font-family:Arial,sans-serif;">
-          &#128218; Missed a tip? Browse all past issues at <a href="https://xnltech.com/archive" style="color:#BCE600;text-decoration:none;font-weight:700;">xnltech.com/archive</a>
+          &#128218; Missed a tip? Browse all past issues at <a href="https://newsletter.xnltech.com/archive" style="color:#BCE600;text-decoration:none;font-weight:700;">newsletter.xnltech.com/archive</a>
         </p>
         <p style="font-size:12px;color:#7A8070;margin:0 0 8px;font-family:Arial,sans-serif;">
-          You're receiving this because you joined the XNL Alliance at <strong style="color:#F2F5E8;">xnltech.com</strong>
+          You're receiving this because you joined the XNL Alliance at <strong style="color:#F2F5E8;">newsletter.xnltech.com</strong>
         </p>
         <p style="font-size:12px;color:#7A8070;margin:0;font-family:Arial,sans-serif;">
           <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
@@ -1658,7 +1665,7 @@ async function sendEmail(subscriber, htmlContent, subject, env) {
 
   let personalizedHtml = htmlContent.replace(
     '{unsubscribe_url}',
-    `https://xnltech.com/unsubscribe?email=${encodeURIComponent(subscriber.email)}`
+    `https://newsletter.xnltech.com/unsubscribe?email=${encodeURIComponent(subscriber.email)}`
   );
 
   const res = await fetch('https://api.resend.com/emails', {
@@ -1703,7 +1710,7 @@ function welcomeEmailHtml(firstName) {
         <tr>
           <td bgcolor="#1E201E" style="background-color:#1E201E;padding:28px 32px;border-bottom:2px solid #BCE600;text-align:center;">
             <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;"><tr>
-              <td style="vertical-align:middle;padding-right:12px;"><img src="https://xnltech.com/logo.png" alt="XNL Cyber Shield" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
+              <td style="vertical-align:middle;padding-right:12px;"><img src="https://newsletter.xnltech.com/logo.png" alt="XNL Cyber Shield" width="34" height="34" style="display:block;width:34px;height:34px;" /></td>
               <td style="vertical-align:middle;">
                 <div style="font-size:24px;font-weight:800;color:#FFFFFF;font-family:Arial,sans-serif;">XNL CYBER <span style="color:#BCE600;">SHIELD</span></div>
               </td>
@@ -1802,16 +1809,16 @@ function welcomeEmailHtml(firstName) {
                     Think of one person — a parent, a friend, a neighbor — who could use a little help staying safe online. Invite them to join the XNL Alliance. It's free, and it could save them from a scam.
                   </p>
                   <!--[if mso]>
-                  <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://xnltech.com" style="height:44px;v-text-anchor:middle;width:280px;" arcsize="18%" strokecolor="#BCE600" fillcolor="#BCE600">
+                  <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://newsletter.xnltech.com" style="height:44px;v-text-anchor:middle;width:280px;" arcsize="18%" strokecolor="#BCE600" fillcolor="#BCE600">
                     <w:anchorlock/>
                     <center style="color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;">Share XNL Cyber Shield &rarr;</center>
                   </v:roundrect>
                   <![endif]-->
                   <!--[if !mso]><!-->
-                  <a href="https://xnltech.com" style="display:inline-block;background-color:#BCE600;color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:700;text-decoration:none;padding:12px 32px;border-radius:8px;">Share XNL Cyber Shield &rarr;</a>
+                  <a href="https://newsletter.xnltech.com" style="display:inline-block;background-color:#BCE600;color:#0D0F0D;font-family:Arial,sans-serif;font-size:16px;font-weight:700;text-decoration:none;padding:12px 32px;border-radius:8px;">Share XNL Cyber Shield &rarr;</a>
                   <!--<![endif]-->
                   <p style="color:#7A8070;font-family:Arial,sans-serif;font-size:13px;margin:14px 0 0;">
-                    Or share this link: <a href="https://xnltech.com" style="color:#BCE600;text-decoration:none;">xnltech.com</a>
+                    Or share this link: <a href="https://newsletter.xnltech.com" style="color:#BCE600;text-decoration:none;">newsletter.xnltech.com</a>
                   </p>
                 </td>
               </tr>
@@ -1832,7 +1839,7 @@ function welcomeEmailHtml(firstName) {
         <tr>
           <td bgcolor="#111311" style="background-color:#111311;padding:20px 32px;text-align:center;border-top:1px solid #2A2C2A;">
             <p style="font-size:12px;color:#7A8070;margin:0 0 8px;font-family:Arial,sans-serif;">
-              You're receiving this because you joined the XNL Alliance at <strong style="color:#F2F5E8;">xnltech.com</strong>
+              You're receiving this because you joined the XNL Alliance at <strong style="color:#F2F5E8;">newsletter.xnltech.com</strong>
             </p>
             <p style="font-size:12px;color:#7A8070;margin:0;font-family:Arial,sans-serif;">
               <a href="{unsubscribe_url}" style="color:#BCE600;text-decoration:none;">Unsubscribe</a>
@@ -1932,7 +1939,7 @@ async function handleUnsubscribePage(request, env) {
       <input type="email" name="email" placeholder="your@email.com" value="${email}" required />
       <button type="submit">Remove Me From the List</button>
     </form>
-    <p style="font-size:0.72rem;color:#5A6050;margin-top:0.75rem;">Changed your mind? <a href="https://xnltech.com" style="color:#BCE600;text-decoration:none;">Re-subscribe here.</a></p>
+    <p style="font-size:0.72rem;color:#5A6050;margin-top:0.75rem;">Changed your mind? <a href="https://newsletter.xnltech.com" style="color:#BCE600;text-decoration:none;">Re-subscribe here.</a></p>
   </div>
 </div>
 </body>
@@ -1992,7 +1999,7 @@ async function handleUnsubscribeSubmit(request, env) {
     <strong style="color:#F2F5E8;">${email}</strong> has been removed from the XNL Alliance. You won't receive any more emails from us.
   </p>
   <p style="font-size:0.8rem;color:#5A6050;margin-bottom:1.5rem;">Changed your mind? You can always re-subscribe below.</p>
-  <a href="https://xnltech.com" style="display:inline-block;background:#BCE600;color:#0D0F0D;font-weight:700;font-size:0.88rem;padding:0.7rem 1.5rem;border-radius:8px;text-decoration:none;">Rejoin the Alliance &rarr;</a>
+  <a href="https://newsletter.xnltech.com" style="display:inline-block;background:#BCE600;color:#0D0F0D;font-weight:700;font-size:0.88rem;padding:0.7rem 1.5rem;border-radius:8px;text-decoration:none;">Rejoin the Alliance &rarr;</a>
 </div>
 </body>
 </html>`);
@@ -2058,13 +2065,13 @@ async function handleArchiveIndex(request, env) {
 <title>XNL Cyber Shield Archive — Free Cybersecurity Newsletter | XNL Tech</title>
 <meta name="description" content="Browse every issue of XNL Cyber Shield — free daily cybersecurity tips, scam alerts, and online safety guides delivered in plain English. Join the XNL Alliance." />
 <meta name="robots" content="index, follow" />
-<link rel="canonical" href="https://xnltech.com/archive" />
+<link rel="canonical" href="https://newsletter.xnltech.com/archive" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="XNL Cyber Shield — Newsletter Archive" />
 <meta property="og:description" content="Free daily cybersecurity tips, scam alerts, and safety guides. Browse all past issues." />
-<meta property="og:url" content="https://xnltech.com/archive" />
+<meta property="og:url" content="https://newsletter.xnltech.com/archive" />
 <meta property="og:site_name" content="XNL Cyber Shield" />
-<meta property="og:image" content="https://xnltech.com/logo.png" />
+<meta property="og:image" content="https://newsletter.xnltech.com/logo.png" />
 <meta name="twitter:card" content="summary" />
 <meta name="twitter:title" content="XNL Cyber Shield — Newsletter Archive" />
 <meta name="twitter:description" content="Free daily cybersecurity tips, scam alerts, and safety guides. Browse all past issues." />
@@ -2090,14 +2097,14 @@ async function handleArchiveIndex(request, env) {
 <div class="grid-bg"></div>
 
 <nav class="topbar">
-  <a href="https://xnltech.com" class="brand">
+  <a href="https://newsletter.xnltech.com" class="brand">
     <div class="brand-shield"><img src="/logo.png" alt="XNL Cyber Shield" width="38" height="38" /></div>
     <div>
       <span class="brand-name">XNL CYBER <span style="color:#BCE600;">SHIELD</span></span>
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
-  <a href="https://xnltech.com" class="nav-cta">Join the Alliance &rarr;</a>
+  <a href="https://newsletter.xnltech.com" class="nav-cta">Join the Alliance &rarr;</a>
 </nav>
 
 <div style="position:relative;z-index:1;max-width:960px;margin:0 auto;padding:5rem 1.5rem 3rem;">
@@ -2120,7 +2127,7 @@ async function handleArchiveIndex(request, env) {
 
   <div style="margin-top:3rem;padding-top:1.5rem;border-top:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
     <p style="font-size:0.73rem;color:#5A6050;">&copy; 2026 XNL Tech &bull; XNL Cyber Shield Newsletter</p>
-    <a href="https://xnltech.com" style="font-size:0.73rem;color:#7A8070;text-decoration:none;">XNLTech.com</a>
+    <a href="https://newsletter.xnltech.com" style="font-size:0.73rem;color:#7A8070;text-decoration:none;">XNLTech.com</a>
   </div>
 
 </div>
@@ -2150,7 +2157,7 @@ async function handleArchiveRead(issueId, env) {
 
   const plainText = (issueBody || issueHtml || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   const seoDescription = (plainText.slice(0, 155) + (plainText.length > 155 ? '...' : '')).replace(/"/g, '&quot;');
-  const canonicalUrl = 'https://xnltech.com/archive/' + encodeURIComponent(decoded);
+  const canonicalUrl = 'https://newsletter.xnltech.com/archive/' + encodeURIComponent(decoded);
   const publishDate = meta.generatedAt || new Date().toISOString();
 
   return html(`<!DOCTYPE html>
@@ -2169,7 +2176,7 @@ async function handleArchiveRead(issueId, env) {
 <meta property="og:description" content="${seoDescription}" />
 <meta property="og:url" content="${canonicalUrl}" />
 <meta property="og:site_name" content="XNL Cyber Shield" />
-<meta property="og:image" content="https://xnltech.com/logo.png" />
+<meta property="og:image" content="https://newsletter.xnltech.com/logo.png" />
 <meta property="article:published_time" content="${publishDate}" />
 <meta property="article:author" content="XNL Tech" />
 <meta property="article:section" content="Cybersecurity" />
@@ -2178,7 +2185,7 @@ async function handleArchiveRead(issueId, env) {
 <meta name="twitter:card" content="summary" />
 <meta name="twitter:title" content="${subject}" />
 <meta name="twitter:description" content="${seoDescription}" />
-<meta name="twitter:image" content="https://xnltech.com/logo.png" />
+<meta name="twitter:image" content="https://newsletter.xnltech.com/logo.png" />
 
 <!-- Structured Data -->
 <script type="application/ld+json">
@@ -2188,10 +2195,10 @@ async function handleArchiveRead(issueId, env) {
   "headline": "${subject.replace(/"/g, '\\"')}",
   "description": "${plainText.slice(0, 200).replace(/"/g, '\\"')}",
   "datePublished": "${publishDate}",
-  "author": { "@type": "Organization", "name": "XNL Tech", "url": "https://xnltech.com" },
-  "publisher": { "@type": "Organization", "name": "XNL Cyber Shield", "url": "https://xnltech.com", "logo": { "@type": "ImageObject", "url": "https://xnltech.com/logo.png" } },
+  "author": { "@type": "Organization", "name": "XNL Tech", "url": "https://newsletter.xnltech.com" },
+  "publisher": { "@type": "Organization", "name": "XNL Cyber Shield", "url": "https://newsletter.xnltech.com", "logo": { "@type": "ImageObject", "url": "https://newsletter.xnltech.com/logo.png" } },
   "mainEntityOfPage": "${canonicalUrl}",
-  "image": "https://xnltech.com/logo.png"
+  "image": "https://newsletter.xnltech.com/logo.png"
 }
 </script>
 
@@ -2249,14 +2256,14 @@ async function handleArchiveRead(issueId, env) {
 <div class="grid-bg"></div>
 
 <nav class="topbar">
-  <a href="https://xnltech.com" class="brand">
+  <a href="https://newsletter.xnltech.com" class="brand">
     <div class="brand-shield"><img src="/logo.png" alt="XNL Cyber Shield" width="38" height="38" /></div>
     <div>
       <span class="brand-name">XNL CYBER <span style="color:#BCE600;">SHIELD</span></span>
       <span class="brand-sub">by XNL Tech</span>
     </div>
   </a>
-  <a href="https://xnltech.com" class="nav-cta">Join the Alliance &rarr;</a>
+  <a href="https://newsletter.xnltech.com" class="nav-cta">Join the Alliance &rarr;</a>
 </nav>
 
 <!-- Issue header -->
@@ -2313,7 +2320,7 @@ async function handleArchiveRead(issueId, env) {
 </div>
 
 <script>
-  const WORKER = 'https://xnltech.com';
+  const WORKER = 'https://newsletter.xnltech.com';
   let popupShown = false;
   let scrollTriggered = false;
 
@@ -5196,7 +5203,7 @@ async function sendStatusReport(env, report) {
   </td></tr>
   ${qaSection}${xPostSection}${growthSection}
   <tr><td style="padding:16px 24px;border-top:1px solid #2A2C2A;text-align:center;">
-    <a href="https://xnltech.com/admin" style="display:inline-block;background:#BCE600;color:#111311;padding:10px 24px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">Open Admin Panel</a>
+    <a href="https://newsletter.xnltech.com/admin" style="display:inline-block;background:#BCE600;color:#111311;padding:10px 24px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">Open Admin Panel</a>
   </td></tr>
 </table>
 </td></tr></table></body></html>`;
@@ -5220,7 +5227,7 @@ async function generateTweet(newsletterSubject, issueType, env) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
-      system: `You write viral tweets for XNL Cyber Shield, a free cybersecurity newsletter by XNL Tech. Our subscribers are called "the XNL Alliance." Tone: urgent but friendly, relatable. Goal: get people to "join the Alliance" at xnltech.com. Never use hashtags excessively — max 1-2.`,
+      system: `You write viral tweets for XNL Cyber Shield, a free cybersecurity newsletter by XNL Tech. Our subscribers are called "the XNL Alliance." Tone: urgent but friendly, relatable. Goal: get people to "join the Alliance" at newsletter.xnltech.com. Never use hashtags excessively — max 1-2.`,
       messages: [{
         role: 'user',
         content: `Write a single tweet (max 270 characters) promoting today's XNL Cyber Shield newsletter.
@@ -5231,7 +5238,7 @@ Issue type: ${issueType}
 The tweet should:
 - Hook with the threat/topic from the subject
 - Create urgency without fearmongering
-- End with a CTA to join the Alliance at xnltech.com
+- End with a CTA to join the Alliance at newsletter.xnltech.com
 - Be under 270 characters (leave room for platform formatting)
 
 Output ONLY the tweet text. No quotes, no labels, no explanation.`
