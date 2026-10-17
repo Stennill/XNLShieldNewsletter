@@ -5124,7 +5124,8 @@ async function runClaudeQA(draft, env) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5-5',
+      thinking: { type: 'between_tools' },
       max_tokens: 2000,
       system: `You are a newsletter QA editor for XNL Cyber Shield, a cybersecurity newsletter for non-tech-savvy everyday people. Your job is to proofread and check quality. Be strict but fair.`,
       messages: [{
@@ -5181,7 +5182,8 @@ async function autoFixDraft(draft, qaResult, env) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5-5',
+      thinking: { type: 'between_tools' },
       max_tokens: 10000,
       system: `You are an editor fixing a newsletter draft. Apply the requested fixes while preserving all HTML structure, inline styles, and brand formatting. Output ONLY the corrected full HTML — no explanation, no markdown, no code fences.`,
       messages: [{
@@ -5294,7 +5296,8 @@ async function generateTweet(newsletterSubject, issueType, env) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5-5',
+      thinking: { type: 'between_tools' },
       max_tokens: 300,
       system: `You write viral tweets for XNL Cyber Shield, a free cybersecurity newsletter by XNL Tech. Our subscribers are called "the XNL Alliance." Tone: urgent but friendly, relatable. Goal: get people to "join the Alliance" at newsletter.xnltech.com. Never use hashtags excessively — max 1-2.`,
       messages: [{
@@ -5441,7 +5444,8 @@ async function generateGrowthTip(growth, env) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-5-5',
+        thinking: { type: 'between_tools' },
         max_tokens: 200,
         system: 'You give brief, actionable newsletter growth tips. One sentence only.',
         messages: [{
