@@ -3,8 +3,10 @@
  * XNL Tech (affiliated: PromptMechanics.org)
  *
  * Routes:
- *   POST /subscribe          — Save subscriber to KV
+ *   POST /subscribe          — Start signup; email must be confirmed
+ *   GET  /verify             — Confirm an email from the signup link
  *   POST /admin/subscribers  — List subscribers (admin, requires secret in body)
+ *   POST /admin/delete-subscribers — Remove selected subscribers (admin)
  *
  * Env vars to set in Cloudflare dashboard:
  *   ANTHROPIC_API_KEY        — Your Anthropic API key
@@ -52,8 +54,16 @@ export default {
       return handleSubscribe(request, env);
     }
 
+    if (request.method === 'GET' && url.pathname === '/verify') {
+      return handleVerifyEmail(request, env);
+    }
+
     if (url.pathname === '/admin/subscribers' && request.method === 'POST') {
       return handleAdminSubscribers(request, env);
+    }
+
+    if (url.pathname === '/admin/delete-subscribers' && request.method === 'POST') {
+      return handleAdminDeleteSubscribers(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/unsubscribe') {
@@ -402,6 +412,104 @@ export default {
   },
 };
 
+// ─── EMAIL CONFIRMATION ──────────────────────────────────────────────────────
+// New signups stay inactive until the person clicks the link we email them.
+// Members already on the list (no verified flag) stay active.
+const CONFIRM_WINDOW_MS = 10 * 60 * 1000;
+const CONFIRM_IP_LIMIT = 5;
+const CONFIRM_GLOBAL_LIMIT = 10;
+const CONFIRM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function escapeHtmlText(value) {
+  return String(value || '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c] || c));
+}
+
+function clientIp(request) {
+  return request.headers.get('CF-Connecting-IP')
+    || String(request.headers.get('x-forwarded-for') || '').split(',')[0].trim()
+    || 'unknown';
+}
+
+function recentHits(raw, now) {
+  let hits = [];
+  try { hits = raw ? JSON.parse(raw) : []; } catch { hits = []; }
+  if (!Array.isArray(hits)) return [];
+  return hits.filter((t) => typeof t === 'number' && now - t < CONFIRM_WINDOW_MS);
+}
+
+async function confirmationRateLimited(env, ip) {
+  const now = Date.now();
+  const ipKey = `rate:confirm:ip:${ip || 'unknown'}`;
+  const globalKey = 'rate:confirm:global';
+  const [ipRaw, globalRaw] = await Promise.all([
+    env.SUBSCRIBERS.get(ipKey),
+    env.SUBSCRIBERS.get(globalKey),
+  ]);
+  const ipHits = recentHits(ipRaw, now);
+  const globalHits = recentHits(globalRaw, now);
+  if (ipHits.length >= CONFIRM_IP_LIMIT || globalHits.length >= CONFIRM_GLOBAL_LIMIT) {
+    return true;
+  }
+  ipHits.push(now);
+  globalHits.push(now);
+  const opts = { expirationTtl: 15 * 60 };
+  await Promise.all([
+    env.SUBSCRIBERS.put(ipKey, JSON.stringify(ipHits), opts),
+    env.SUBSCRIBERS.put(globalKey, JSON.stringify(globalHits), opts),
+  ]);
+  return false;
+}
+
+function isConfirmedSubscriber(subscriber) {
+  return !!(subscriber && subscriber.active && subscriber.verified !== false);
+}
+
+function confirmEmailHtml(firstName, confirmUrl) {
+  const name = escapeHtmlText(firstName || 'there');
+  const href = escapeHtmlText(confirmUrl);
+  return `<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:0;background:#111311;font-family:Arial,sans-serif;color:#F2F5E8;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#111311;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="100%" style="max-width:480px;background:#1E201E;border-radius:12px;padding:32px 28px;">
+        <tr><td>
+          <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.08em;color:#BCE600;">XNL CYBER SHIELD</p>
+          <h1 style="margin:0 0 16px;font-size:22px;color:#fff;">Confirm your email</h1>
+          <p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:#F2F5E8;">Hi ${name},</p>
+          <p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#B0B8A8;">Click the button below to join the newsletter. You will not be added until you confirm. This link expires in 7 days.</p>
+          <a href="${href}" style="display:inline-block;background:#BCE600;color:#111311;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px;">Confirm my email</a>
+          <p style="margin:20px 0 0;font-size:13px;line-height:1.6;color:#7A8070;">If you did not sign up, you can ignore this message.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+function verifyResultPage(message, ok) {
+  const color = ok ? '#BCE600' : '#FF5C5C';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${ok ? 'Email confirmed' : 'Confirmation failed'} | XNL Cyber Shield</title>
+</head>
+<body style="margin:0;background:#111311;color:#F2F5E8;font-family:Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div style="max-width:440px;text-align:center;">
+    <p style="letter-spacing:0.08em;color:#BCE600;font-size:13px;">XNL CYBER SHIELD</p>
+    <h1 style="font-size:28px;margin:8px 0 12px;color:${color};">${ok ? 'Email confirmed' : 'Link not valid'}</h1>
+    <p style="color:#B0B8A8;line-height:1.6;margin:0 0 20px;">${escapeHtmlText(message)}</p>
+    <a href="https://newsletter.xnltech.com" style="color:#BCE600;text-decoration:none;">Back to the newsletter</a>
+  </div>
+</body>
+</html>`;
+}
+
 // ─── SUBSCRIBE HANDLER ───────────────────────────────────────────────────────
 async function handleSubscribe(request, env) {
   let body;
@@ -411,37 +519,108 @@ async function handleSubscribe(request, env) {
     return json({ error: 'Invalid JSON' }, 400);
   }
 
-  const { firstName, lastName, email } = body;
+  const firstName = String(body.firstName || '').trim();
+  const lastName = String(body.lastName || '').trim();
+  const email = String(body.email || '').toLowerCase().trim();
+  const domain = email.split('@')[1] || '';
 
-  if (!email || !email.includes('@')) {
+  if (!email || !email.includes('@') || email.startsWith('@') || !domain.includes('.')) {
     return json({ error: 'Valid email is required' }, 400);
   }
 
-  const key = `sub:${email.toLowerCase().trim()}`;
+  const key = `sub:${email}`;
+  let existing = null;
+  const existingRaw = await env.SUBSCRIBERS.get(key);
+  if (existingRaw) {
+    try { existing = JSON.parse(existingRaw); } catch { existing = null; }
+  }
+  if (isConfirmedSubscriber(existing)) {
+    return json({ success: true, already: true, message: 'Already subscribed' });
+  }
+
+  if (await confirmationRateLimited(env, clientIp(request))) {
+    return json({ error: 'Too many signup attempts. Please try again in a few minutes.' }, 429);
+  }
+
+  const now = new Date();
+  const token = crypto.randomUUID();
   const subscriber = {
-    firstName: firstName || '',
-    lastName: lastName || '',
-    email: email.toLowerCase().trim(),
-    subscribedAt: new Date().toISOString(),
-    active: true,
+    firstName,
+    lastName,
+    email,
+    subscribedAt: (existing && existing.subscribedAt) || now.toISOString(),
+    active: false,
+    verified: false,
+    verifyToken: token,
+    verifyExpiresAt: new Date(now.getTime() + CONFIRM_TTL_MS).toISOString(),
   };
 
   await env.SUBSCRIBERS.put(key, JSON.stringify(subscriber));
 
-  // Optional: send welcome email
+  const confirmUrl = `${new URL(request.url).origin}/verify?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}`;
+  try {
+    await sendEmail(
+      { email, firstName },
+      confirmEmailHtml(firstName, confirmUrl),
+      'Confirm your XNL Cyber Shield subscription',
+      env
+    );
+  } catch (e) {
+    console.error('Confirmation email failed:', e.message);
+    return json({ error: 'Could not send the confirmation email. Please try again.' }, 502);
+  }
+
+  return json({ success: true, pending: true, message: 'Check your email to confirm your subscription.' });
+}
+
+async function handleVerifyEmail(request, env) {
+  const url = new URL(request.url);
+  const email = String(url.searchParams.get('email') || '').toLowerCase().trim();
+  const token = String(url.searchParams.get('token') || '');
+  if (!email || !email.includes('@') || !token) {
+    return html(verifyResultPage('This confirmation link is invalid or expired.', false), 400);
+  }
+
+  const key = `sub:${email}`;
+  const raw = await env.SUBSCRIBERS.get(key);
+  if (!raw) {
+    return html(verifyResultPage('This confirmation link is invalid or expired.', false), 400);
+  }
+
+  let subscriber;
+  try { subscriber = JSON.parse(raw); } catch {
+    return html(verifyResultPage('This confirmation link is invalid or expired.', false), 400);
+  }
+
+  if (isConfirmedSubscriber(subscriber)) {
+    return html(verifyResultPage('This email is already confirmed. You are on the list.', true));
+  }
+  if (!subscriber.verifyToken || subscriber.verifyToken !== token) {
+    return html(verifyResultPage('This confirmation link is invalid or expired.', false), 400);
+  }
+  if (subscriber.verifyExpiresAt && subscriber.verifyExpiresAt < new Date().toISOString()) {
+    return html(verifyResultPage('This confirmation link has expired. Sign up again to get a new one.', false), 400);
+  }
+
+  subscriber.verified = true;
+  subscriber.active = true;
+  subscriber.verifiedAt = new Date().toISOString();
+  delete subscriber.verifyToken;
+  delete subscriber.verifyExpiresAt;
+  await env.SUBSCRIBERS.put(key, JSON.stringify(subscriber));
+
   try {
     await sendEmail(
       { email: subscriber.email, firstName: subscriber.firstName },
       welcomeEmailHtml(subscriber.firstName),
-      `Welcome to XNL Cyber Shield — Join the Alliance`,
+      'Welcome to XNL Cyber Shield — Join the Alliance',
       env
     );
   } catch (e) {
     console.error('Welcome email failed:', e.message);
-    // Don't fail the subscription if welcome email fails
   }
 
-  return json({ success: true, message: 'Subscribed successfully!' });
+  return html(verifyResultPage('You are confirmed. Welcome to the XNL Alliance.', true));
 }
 
 // ─── LIST SUBSCRIBERS (ADMIN) ────────────────────────────────────────────────
@@ -460,6 +639,35 @@ async function handleAdminSubscribers(request, env) {
   }
 
   return json({ count: subscribers.length, subscribers });
+}
+
+async function handleAdminDeleteSubscribers(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'Invalid JSON' }, 400);
+  }
+  if (!body.secret || body.secret !== env.ADMIN_SECRET) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const emails = [...new Set((Array.isArray(body.emails) ? body.emails : [])
+    .map((email) => String(email || '').toLowerCase().trim())
+    .filter((email) => email.includes('@') && !email.startsWith('@')))];
+  if (emails.length > 500) {
+    return json({ error: 'Too many subscribers in one request' }, 400);
+  }
+
+  let removed = 0;
+  for (const email of emails) {
+    const key = `sub:${email}`;
+    const existing = await env.SUBSCRIBERS.get(key);
+    if (!existing) continue;
+    await env.SUBSCRIBERS.delete(key);
+    removed++;
+  }
+  return json({ success: true, removed });
 }
 
 // ─── ADMIN: GENERATE FROM READER QUESTION ───────────────────────────────────
@@ -2436,14 +2644,20 @@ async function handleArchiveRead(issueId, env) {
       return { success: true, message: null };
     }
 
-    // Not subscribed — sign them up
-    await fetch(WORKER + '/subscribe', {
+    // Not subscribed — send a confirmation email, then ask them to finish
+    const subRes = await fetch(WORKER + '/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, firstName: '', lastName: '' }),
     });
-
-    return { success: true, message: null };
+    const subData = await subRes.json().catch(function() { return {}; });
+    if (subData.already) {
+      return { success: true, message: null };
+    }
+    if (subData.pending) {
+      return { success: false, message: 'Check your email and click Confirm. Then come back to unlock this issue.' };
+    }
+    return { success: false, message: subData.error || 'Could not subscribe. Please try again.' };
   }
 
   async function gateAccess() {
@@ -2994,7 +3208,7 @@ function handleAdminPage() {
 
     <!-- ═══════════ SUBSCRIBERS ═══════════ -->
     <div class="tab-view" id="view-subscribers">
-      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:24px;">
+      <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-label">Active Subscribers</div>
           <div class="stat-value" id="subStatActive">—</div>
@@ -3004,9 +3218,26 @@ function handleAdminPage() {
           <div class="stat-value white" id="subStatTotal">—</div>
         </div>
         <div class="stat-card">
+          <div class="stat-label">Unconfirmed</div>
+          <div class="stat-value amber" id="subStatPending">—</div>
+        </div>
+        <div class="stat-card">
           <div class="stat-label">New Since Baseline</div>
           <div class="stat-value amber" id="subStatNew">—</div>
         </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>All subscribers</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-ghost btn-sm" onclick="togglePendingSubscribers(true)">Select unconfirmed</button>
+            <button class="btn btn-red btn-sm" onclick="removeUnconfirmedSubscribers()">Remove unconfirmed</button>
+            <button class="btn btn-red btn-sm" onclick="removeSelectedSubscribers()">Remove selected</button>
+          </div>
+        </div>
+        <p style="color:#7A8070;font-size:13px;margin-bottom:12px;">New signups stay pending until they click the confirmation link. People who joined before confirmation was required stay confirmed. Select the rows you want gone, then remove them. Nothing is deleted until you do.</p>
+        <div id="subRoster" style="color:#7A8070;font-size:14px;">Loading...</div>
       </div>
 
       <div class="graph-wrap">
@@ -3493,8 +3724,82 @@ async function regenerateDraft() {
 // ── Subscriber tab ──
 async function loadSubscriberTab() {
   loadSubCount();
+  loadSubscriberRoster();
   loadGrowthChart('subGrowthChart');
   loadSubscriberReport();
+}
+
+function subscriberStatusLabel(s) {
+  if (s.verified === false) return 'Pending';
+  if (!s.active) return 'Unsubscribed';
+  return 'Confirmed';
+}
+
+async function loadSubscriberRoster() {
+  var el = $('subRoster');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#88bbff;">Loading...</span>';
+  try {
+    var res = await fetch('/admin/subscribers', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    var people = (data.subscribers || []).slice().sort(function(a, b) {
+      return (b.subscribedAt || '').localeCompare(a.subscribedAt || '');
+    });
+    var pending = people.filter(function(s) { return s.verified === false; }).length;
+    if ($('subStatPending')) $('subStatPending').textContent = pending;
+    if (!people.length) {
+      el.innerHTML = '<div style="color:#7A8070;text-align:center;padding:16px;">No subscribers yet.</div>';
+      return;
+    }
+    el.innerHTML = people.map(function(s) {
+      var name = ((s.firstName || '') + ' ' + (s.lastName || '')).trim() || '(no name)';
+      var when = s.subscribedAt ? new Date(s.subscribedAt).toLocaleString() : '';
+      var status = subscriberStatusLabel(s);
+      var color = status === 'Pending' ? '#F5A623' : (status === 'Unsubscribed' ? '#7A8070' : '#BCE600');
+      var email = s.email || '';
+      return '<label style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid #1E201E;cursor:pointer;">'
+        + '<input type="checkbox" class="sub-check" value="' + escapeHtml(email) + '" data-pending="' + (s.verified === false ? '1' : '0') + '" style="width:auto;">'
+        + '<span style="flex:1;color:#F2F5E8;font-size:14px;">' + escapeHtml(name) + ' <span style="color:#7A8070;">(' + escapeHtml(email) + ')</span></span>'
+        + '<span style="color:' + color + ';font-size:11px;font-weight:700;letter-spacing:0.04em;">' + status + '</span>'
+        + '<span style="color:#7A8070;font-size:12px;white-space:nowrap;">' + escapeHtml(when) + '</span>'
+        + '</label>';
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<span style="color:#f88;">Failed: ' + e.message + '</span>';
+  }
+}
+
+function selectedSubscriberEmails() {
+  return Array.prototype.map.call(document.querySelectorAll('.sub-check:checked'), function(el) { return el.value; });
+}
+
+function togglePendingSubscribers(on) {
+  document.querySelectorAll('.sub-check[data-pending="1"]').forEach(function(el) { el.checked = !!on; });
+}
+
+async function removeSelectedSubscribers() {
+  var emails = selectedSubscriberEmails();
+  if (!emails.length) { alert('Select at least one subscriber.'); return; }
+  if (!confirm('Remove ' + emails.length + ' subscriber' + (emails.length === 1 ? '' : 's') + '? They will stop receiving the newsletter.')) return;
+  await deleteSubscribers(emails);
+}
+
+async function removeUnconfirmedSubscribers() {
+  var emails = Array.prototype.map.call(document.querySelectorAll('.sub-check[data-pending="1"]'), function(el) { return el.value; });
+  if (!emails.length) { alert('No unconfirmed signups.'); return; }
+  if (!confirm('Remove ' + emails.length + ' unconfirmed signup' + (emails.length === 1 ? '' : 's') + '? These addresses never clicked the confirmation link.')) return;
+  await deleteSubscribers(emails);
+}
+
+async function deleteSubscribers(emails) {
+  try {
+    var res = await fetch('/admin/delete-subscribers', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secret: adminSecret, emails: emails }) });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Remove failed');
+    loadSubscriberTab();
+    loadSubCount();
+  } catch (e) { alert('Remove failed: ' + e.message); }
 }
 
 async function loadSubscriberReport() {
@@ -4603,6 +4908,7 @@ async function handleLandingPage(env) {
         <button class="submit-btn" id="submit-btn" onclick="handleJoin()">
           Join the Alliance &nbsp;&#8594;
         </button>
+        <p id="join-error" style="display:none;color:#FF5C5C;font-size:0.85rem;margin-top:0.75rem;"></p>
 
         <p class="terms-note">
           No spam. Unsubscribe any time in one click.<br/>
@@ -4617,9 +4923,9 @@ async function handleLandingPage(env) {
 
       <div class="success-screen" id="success-screen">
         <div class="success-icon">&#128737;</div>
-        <h3>YOU'RE ALL SET!</h3>
-        <p>Welcome to the XNL Alliance. Check your inbox &mdash; a welcome message is on its way.<br/><br/>
-        Your first issue arrives <strong style="color:var(--off)" id="next-issue-time"></strong></p>
+        <h3>CHECK YOUR EMAIL</h3>
+        <p id="success-lead">Click the confirmation link we just sent. You will not be added until you confirm.<br/><br/>
+        After that, your first issue arrives <strong style="color:var(--off)" id="next-issue-time"></strong></p>
         <script>
         (function(){
           var days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -4772,6 +5078,8 @@ async function handleLandingPage(env) {
     const fname = document.getElementById('fname').value.trim();
     const lname = document.getElementById('lname').value.trim();
     const email = document.getElementById('email').value.trim();
+    const errEl = document.getElementById('join-error');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     if (!fname) { shake('fname'); return; }
     if (!email || !email.includes('@')) { shake('email'); return; }
 
@@ -4780,12 +5088,36 @@ async function handleLandingPage(env) {
     btn.disabled = true;
 
     try {
-      await fetch(WORKER_URL, {
+      const res = await fetch(WORKER_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ firstName: fname, lastName: lname, email }),
       });
-    } catch (_) {}
+      const data = await res.json().catch(function() { return {}; });
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Join the Alliance \u2192';
+        if (errEl) {
+          errEl.textContent = data.error || 'Something went wrong. Please try again.';
+          errEl.style.display = 'block';
+        }
+        return;
+      }
+      const lead = document.getElementById('success-lead');
+      const title = document.querySelector('#success-screen h3');
+      if (data.already) {
+        if (title) title.textContent = "YOU'RE ALREADY IN";
+        if (lead) lead.textContent = 'That email is already confirmed. Your issues will keep arriving.';
+      }
+    } catch (_) {
+      btn.disabled = false;
+      btn.textContent = 'Join the Alliance \u2192';
+      if (errEl) {
+        errEl.textContent = 'Something went wrong. Please try again.';
+        errEl.style.display = 'block';
+      }
+      return;
+    }
 
     document.getElementById('form-wrapper').style.display = 'none';
     document.getElementById('success-screen').style.display = 'block';
